@@ -23,8 +23,10 @@
 		6E24753F20D8001600DEAAA1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6E24751220D8001500DEAAA1 /* Assets.xcassets */; };
 		6E24754020D8001600DEAAA1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6E24751220D8001500DEAAA1 /* Assets.xcassets */; };
 		6E24754B20D8157F00DEAAA1 /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6E24754A20D8157F00DEAAA1 /* MetalPerformanceShaders.framework */; };
-		6EC8A7A420D8EC0F00032F1B /* ModelIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6EC8A7A320D8EC0F00032F1B /* ModelIO.framework */; };
 		6EC8A7A620D8ED4C00032F1B /* Default-568h@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 6EC8A7A520D8ED4C00032F1B /* Default-568h@2x.png */; };
+		6EC8A7B120D9080900032F1B /* SceneKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6EC8A7B020D9080900032F1B /* SceneKit.framework */; };
+		6EC8A7B620D92A4500032F1B /* Media in Resources */ = {isa = PBXBuildFile; fileRef = 6EC8A7B520D92A4500032F1B /* Media */; };
+		6EC8A7B720D92A4500032F1B /* Media in Resources */ = {isa = PBXBuildFile; fileRef = 6EC8A7B520D92A4500032F1B /* Media */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,8 +53,9 @@
 		6E24753820D8001600DEAAA1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		6E24753920D8001600DEAAA1 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		6E24754A20D8157F00DEAAA1 /* MetalPerformanceShaders.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalPerformanceShaders.framework; path = System/Library/Frameworks/MetalPerformanceShaders.framework; sourceTree = SDKROOT; };
-		6EC8A7A320D8EC0F00032F1B /* ModelIO.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ModelIO.framework; path = System/Library/Frameworks/ModelIO.framework; sourceTree = SDKROOT; };
 		6EC8A7A520D8ED4C00032F1B /* Default-568h@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Default-568h@2x.png"; sourceTree = "<group>"; };
+		6EC8A7B020D9080900032F1B /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
+		6EC8A7B520D92A4500032F1B /* Media */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Media; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,7 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6EC8A7A420D8EC0F00032F1B /* ModelIO.framework in Frameworks */,
+				6EC8A7B120D9080900032F1B /* SceneKit.framework in Frameworks */,
 				6E24754B20D8157F00DEAAA1 /* MetalPerformanceShaders.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -78,7 +81,6 @@
 		6E24750820D8001400DEAAA1 = {
 			isa = PBXGroup;
 			children = (
-				6EC8A7A520D8ED4C00032F1B /* Default-568h@2x.png */,
 				6E24750D20D8001400DEAAA1 /* renderer */,
 				6E24751920D8001500DEAAA1 /* ios */,
 				6E24752E20D8001500DEAAA1 /* macos */,
@@ -95,6 +97,7 @@
 				6E24751020D8001400DEAAA1 /* ShaderTypes.h */,
 				6E24751120D8001400DEAAA1 /* Shaders.metal */,
 				6E24751220D8001500DEAAA1 /* Assets.xcassets */,
+				6EC8A7B520D92A4500032F1B /* Media */,
 			);
 			path = renderer;
 			sourceTree = "<group>";
@@ -111,6 +114,7 @@
 		6E24751920D8001500DEAAA1 /* ios */ = {
 			isa = PBXGroup;
 			children = (
+				6EC8A7A520D8ED4C00032F1B /* Default-568h@2x.png */,
 				6E24751A20D8001500DEAAA1 /* AppDelegate.h */,
 				6E24751B20D8001500DEAAA1 /* AppDelegate.m */,
 				6E24751D20D8001500DEAAA1 /* GameViewController.h */,
@@ -140,7 +144,7 @@
 		6E24754920D8157E00DEAAA1 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				6EC8A7A320D8EC0F00032F1B /* ModelIO.framework */,
+				6EC8A7B020D9080900032F1B /* SceneKit.framework */,
 				6E24754A20D8157F00DEAAA1 /* MetalPerformanceShaders.framework */,
 			);
 			name = Frameworks;
@@ -225,6 +229,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6E24752220D8001500DEAAA1 /* Main.storyboard in Resources */,
+				6EC8A7B620D92A4500032F1B /* Media in Resources */,
 				6EC8A7A620D8ED4C00032F1B /* Default-568h@2x.png in Resources */,
 				6E24753F20D8001600DEAAA1 /* Assets.xcassets in Resources */,
 				6E24752520D8001500DEAAA1 /* LaunchScreen.storyboard in Resources */,
@@ -235,6 +240,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6EC8A7B720D92A4500032F1B /* Media in Resources */,
 				6E24754020D8001600DEAAA1 /* Assets.xcassets in Resources */,
 				6E24753720D8001600DEAAA1 /* Main.storyboard in Resources */,
 			);

@@ -1,15 +1,10 @@
-//
-//  Renderer.m
-//  metal-rt Shared
-//
-//  Created by Sergey Reznik on 6/18/18.
-//  Copyright © 2018 Serhii Rieznik. All rights reserved.
-//
-
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <ModelIO/ModelIO.h>
+#import <SceneKit/SceneKit.h>
+#import <simd/simd.h>
 #import "Renderer.h"
 #import "ShaderTypes.h"
+#import <vector>
 
 static const NSUInteger MaxBuffersInFlight = 3;
 
@@ -24,9 +19,16 @@ static const NSUInteger MaxBuffersInFlight = 3;
     id<MTLTexture> _image;
     id<MTLBuffer> _rayBuffer;
     id<MTLBuffer> _intersectionBuffer;
+    id<MTLBuffer> _geometryBuffer;
+    id<MTLBuffer> _indexBuffer;
+    id<MTLBuffer> _materialIndexBuffer;
+    id<MTLBuffer> _materialBuffer;
+    id<MTLBuffer> _sharedData[MaxBuffersInFlight];
  
+    CFTimeInterval _startupTime;
     MPSTriangleAccelerationStructure* _accelerationStructure;
     MPSRayIntersector* _intersector;
+    uint32_t _frameIndex;
 }
 
 -(nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)view;
@@ -34,8 +36,10 @@ static const NSUInteger MaxBuffersInFlight = 3;
     self = [super init];
     if(self)
     {
+        _frameIndex = 0;
         _device = view.device;
         _inFlightSemaphore = dispatch_semaphore_create(MaxBuffersInFlight);
+        _startupTime = CACurrentMediaTime();
         [self _loadMetalWithView:view];
         [self _initRaytracing];
     }
@@ -46,8 +50,11 @@ static const NSUInteger MaxBuffersInFlight = 3;
 - (void)_loadMetalWithView:(nonnull MTKView *)view;
 {
     view.depthStencilPixelFormat = MTLPixelFormatInvalid;
-    view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
+    view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
     view.sampleCount = 1;
+    
+    for (uint32_t i = 0; i < MaxBuffersInFlight; ++i)
+        _sharedData[i] = [_device newBufferWithLength:sizeof(_sharedData) options:MTLResourceStorageModeManaged];
     
     id<MTLLibrary> defaultLibrary = [_device newDefaultLibrary];
     
@@ -77,28 +84,128 @@ static const NSUInteger MaxBuffersInFlight = 3;
 
 - (void)_initRaytracing
 {
-    vector_float4 vertices[] = {
-        {-1.0, -1.0f, 0.0f, 1.0f},
-        { 1.0, -1.0f, 0.0f, 1.0f},
-        {-1.0,  1.0f, 0.0f, 1.0f},
-        { 1.0,  1.0f, 0.0f, 1.0f},
+    struct Vertex
+    {
+        float v[3];
+        float n[3];
+        float t[2];
     };
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    std::vector<uint32_t> masks;
+    std::vector<Material> materials;
     
-    uint32_t indices[] = {
-        0, 1, 2,
-        1, 3, 2
-    };
+    NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:@"Media/cornellbox" withExtension:@"obj"];
+    SCNScene* scene = [SCNScene sceneWithURL:assetUrl options:nil error:nil];
+    SCNNode* rootGeometryNode = [[[scene rootNode] childNodes] objectAtIndex:0]; // hopefully it is fine ^_^
+    SCNGeometry* geometry = [rootGeometryNode geometry];
     
-    uint32_t triangleCount = (sizeof(indices) / sizeof(indices[6])) / 3;
+    NSInteger vertexCount = 0;
+    const uint8_t* vertexData = nullptr;
+    const uint8_t* normalData = nullptr;
+    const uint8_t* texCoordData = nullptr;
+    NSInteger vertexStride = 0;
+    NSInteger normalStride = 0;
+    NSInteger texCoordStride = 0;
     
-    id<MTLBuffer> vertexBuffer = [_device newBufferWithBytes:vertices length:sizeof(vertices) options:MTLResourceStorageModeManaged];
-    id<MTLBuffer> indexBuffer = [_device newBufferWithBytes:indices length:sizeof(indices) options:MTLResourceStorageModeManaged];
-    
+    for (SCNMaterial* material in [geometry materials])
+    {
+        NSColor* diffuse = [[material diffuse] contents];
+        NSColor* emissive = [[material emission] contents];
+
+        materials.emplace_back();
+        Material& mtl = materials.back();
+        mtl.diffuse[0] = diffuse.redComponent;
+        mtl.diffuse[1] = diffuse.greenComponent;
+        mtl.diffuse[2] = diffuse.blueComponent;
+        mtl.emissive[0] = emissive.redComponent;
+        mtl.emissive[1] = emissive.greenComponent;
+        mtl.emissive[2] = emissive.blueComponent;
+    }
+
+    for (SCNGeometrySource* source in [geometry geometrySources])
+    {
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>([[source data] bytes]) + [source dataOffset];
+        if ([source semantic] == SCNGeometrySourceSemanticVertex)
+        {
+            vertexCount = [source vectorCount];
+            vertexStride = [source dataStride];
+            vertexData = ptr;
+        }
+        else if ([source semantic] == SCNGeometrySourceSemanticNormal)
+        {
+            normalStride = [source dataStride];
+            normalData = ptr;
+        }
+        else if ([source semantic] == SCNGeometrySourceSemanticTexcoord)
+        {
+            texCoordStride = [source dataStride];
+            texCoordData = ptr;
+        }
+    }
+
+    vertices.resize(vertexCount);
+    for (NSInteger i = 0; i < vertexCount; ++i)
+    {
+        Vertex& vert = vertices[i];
+        {
+            const vector_float3* ptr = reinterpret_cast<const vector_float3*>(vertexData + i * vertexStride);
+            memcpy(vert.v, ptr, sizeof(float) * 3);
+        }
+        if (normalData)
+        {
+            const vector_float3* ptr = reinterpret_cast<const vector_float3*>(normalData + i * normalStride);
+            memcpy(vert.n, ptr, sizeof(float) * 3);
+        }
+        
+        if (texCoordData)
+        {
+            const vector_float2* ptr = reinterpret_cast<const vector_float2*>(texCoordData + i * texCoordStride);
+            memcpy(vert.t, ptr, sizeof(float) * 2);
+        }
+    }
+
+    // The index of the material used for a geometry element is equal to the index of that element modulo the number of materials.
+    NSInteger elementIndex = 0;
+    for (SCNGeometryElement* element in [geometry geometryElements])
+    {
+        NSInteger materialIndex = elementIndex % [[geometry materials] count];
+        
+        if (([element bytesPerIndex] == 4) && ([element primitiveType] == SCNGeometryPrimitiveTypeTriangles))
+        {
+            NSInteger triangleCount = [element primitiveCount];
+            
+            masks.reserve(masks.size() + triangleCount);
+            indices.reserve(indices.size() + 3 * triangleCount);
+            
+            const uint32_t* rawData = reinterpret_cast<const uint32_t*>([[element data] bytes]);
+            for (NSInteger i = 0; i < triangleCount; ++i)
+            {
+                masks.emplace_back(materialIndex);
+                indices.emplace_back(*rawData++);
+                indices.emplace_back(*rawData++);
+                indices.emplace_back(*rawData++);
+            }
+        }
+        else
+        {
+            NSLog(@"%@ : not implemented", element);
+        }
+        
+        ++elementIndex;
+    }
+
+    _geometryBuffer = [_device newBufferWithBytes:vertices.data() length:vertices.size() * sizeof(Vertex) options:MTLResourceStorageModeManaged];
+    _indexBuffer = [_device newBufferWithBytes:indices.data() length:indices.size() * sizeof(uint32_t) options:MTLResourceStorageModeManaged];
+    _materialIndexBuffer = [_device newBufferWithBytes:masks.data() length:masks.size() * sizeof(uint32_t) options:MTLResourceStorageModeManaged];
+    _materialBuffer = [_device newBufferWithBytes:materials.data() length:materials.size() * sizeof(Material) options:MTLResourceStorageModeManaged];
+
     _accelerationStructure = [[MPSTriangleAccelerationStructure alloc] initWithDevice:_device];
-    [_accelerationStructure setVertexBuffer:vertexBuffer];
-    [_accelerationStructure setIndexBuffer:indexBuffer];
-    [_accelerationStructure setVertexStride:sizeof(simd_float4)];
-    [_accelerationStructure setTriangleCount:triangleCount];
+    [_accelerationStructure setVertexBuffer:_geometryBuffer];
+    [_accelerationStructure setIndexBuffer:_indexBuffer];
+    [_accelerationStructure setVertexStride:sizeof(Vertex)];
+    [_accelerationStructure setTriangleCount:indices.size() / 3];
+    [_accelerationStructure setIndexType:MPSDataTypeUInt32];
     [_accelerationStructure rebuild];
     
     _intersector = [[MPSRayIntersector alloc] initWithDevice:_device];
@@ -106,6 +213,14 @@ static const NSUInteger MaxBuffersInFlight = 3;
     [_intersector setRayDataType:MPSRayDataTypeOriginMinDistanceDirectionMaxDistance];
     [_intersector setRayMaskOptions:MPSRayMaskOptionNone];
     [_intersector setIntersectionDataType:MPSIntersectionDataTypeDistancePrimitiveIndexCoordinates];
+}
+
+- (void)_updateSharedData
+{
+    SharedData* data = reinterpret_cast<SharedData*>([_sharedData[_frameIndex] contents]);
+    data->frameIndex = _frameIndex;
+    data->time = CACurrentMediaTime() - _startupTime;
+    [_sharedData[_frameIndex] didModifyRange:NSMakeRange(0, sizeof(SharedData))];
 }
 
 - (void)drawInMTKView:(nonnull MTKView *)view
@@ -118,7 +233,9 @@ static const NSUInteger MaxBuffersInFlight = 3;
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         dispatch_semaphore_signal(block_sema);
     }];
-    
+
+    [self _updateSharedData];
+
     MTLRenderPassDescriptor* renderPassDescriptor = view.currentRenderPassDescriptor;
     if (renderPassDescriptor == nil)
     {
@@ -131,6 +248,7 @@ static const NSUInteger MaxBuffersInFlight = 3;
     [computeEncoder pushDebugGroup:@"Generate rays"];
     {
         [computeEncoder setBuffer:_rayBuffer offset:0 atIndex:0];
+        [computeEncoder setBuffer:_sharedData[_frameIndex] offset:0 atIndex:1];
         [computeEncoder setComputePipelineState:_rayGenerator];
         [computeEncoder dispatchThreads:MTLSizeMake(view.drawableSize.width, view.drawableSize.height, 1)
                   threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
@@ -156,6 +274,11 @@ static const NSUInteger MaxBuffersInFlight = 3;
     {
         [computeEncoder setTexture:_image atIndex:0];
         [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
+        [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:1];
+        [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:2];
+        [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+        [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
+        [computeEncoder setBuffer:_sharedData[_frameIndex] offset:0 atIndex:5];
         [computeEncoder setComputePipelineState:_intersectionHandler];
         [computeEncoder dispatchThreads:MTLSizeMake(view.drawableSize.width, view.drawableSize.height, 1)
                   threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
@@ -175,11 +298,13 @@ static const NSUInteger MaxBuffersInFlight = 3;
     [renderEncoder endEncoding];
     [commandBuffer presentDrawable:view.currentDrawable];
     [commandBuffer commit];
+    
+    _frameIndex = (_frameIndex + 1) % MaxBuffersInFlight;
 }
 
 - (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
 {
-    MTLTextureDescriptor* imageDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:size.width height:size.height mipmapped:NO];
+    MTLTextureDescriptor* imageDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:size.width height:size.height mipmapped:NO];
     imageDescriptor.usage |= MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
     _image = [_device newTextureWithDescriptor:imageDescriptor];
     
