@@ -10,17 +10,17 @@ Kd 1.0 1.0 1.0
 newmtl ceiling
 Kd 1.0 1.0 1.0
 
-newmtl backWall
-Kd 1.0 0.0 1.0
-
 newmtl frontWall
 Kd 1.0 1.0 1.0
+Ka 0 0 0
 
 newmtl shortBox
 Kd 1.0 1.0 1.0
+Ka 0 0 0
 
 newmtl tallBox
 Kd 1.0 1.0 1.0
 
 newmtl light
+Kd 1 1 1
 Ka 5 4 3

@@ -10,18 +10,28 @@
 #   define packed_float3(x) float x[3]
 #endif
 
+struct SharedData
+{
+    unsigned int frameIndex;
+    unsigned int lightTrianglesCount;
+    float time;
+};
+
 struct Ray
 {
     packed_float3(origin);
     float minDistance;
     packed_float3(direction);
     float maxDistance;
+    packed_float3(throughput);
+    packed_float3(radiance);
+    unsigned int targetIndex;
 };
 
 struct Intersection
 {
     float distance;
-    int index;
+    unsigned int triangleIndex;
     packed_float2 coordinates;
 };
 
@@ -38,8 +48,12 @@ struct Material
     packed_float3(emissive);
 };
 
-struct SharedData
+struct LightTriangle
 {
-    int frameIndex;
-    float time;
+    float area;
+    float pdf;
+    float cdf;
+    unsigned int index;
 };
+
+#define NOISE_DIMENSIONS 64
