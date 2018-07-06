@@ -143,7 +143,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     std::vector<Material> materials;
     std::vector<LightTriangle> lightTriangles;
     
-    NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:@"Media/cornellbox" withExtension:@"obj"];
+    NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:@"Media/CornellBox-Water" withExtension:@"obj"];
     SCNScene* scene = [SCNScene sceneWithURL:assetUrl options:nil error:nil];
     SCNNode* rootGeometryNode = [[[scene rootNode] childNodes] objectAtIndex:0]; // hopefully it is fine ^_^
     SCNGeometry* geometry = [rootGeometryNode geometry];
@@ -242,13 +242,10 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
                     vector_float3 p1 = {v1.v[0], v1.v[1], v1.v[2]};
                     vector_float3 p2 = {v2.v[0], v2.v[1], v2.v[2]};
                     vector_float3 p3 = {v3.v[0], v3.v[1], v3.v[2]};
-                    vector_float3 p2to1 = p2 - p1;
-                    vector_float3 p3to1 = p3 - p1;
-                    float area = 0.5f * simd_length(simd_cross(p2to1, p3to1));
-                    totalArea += area;
                     lightTriangles.emplace_back();
                     lightTriangles.back().index = static_cast<int>(materialIndices.size());
-                    lightTriangles.back().area = area;
+                    lightTriangles.back().area = 0.5f * simd_length(simd_cross(p2 - p1, p3 - p1));
+                    totalArea += lightTriangles.back().area;
                 }
                 
                 materialIndices.emplace_back(materialIndex);

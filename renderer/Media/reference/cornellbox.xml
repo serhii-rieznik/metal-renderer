@@ -6,10 +6,7 @@
 -->
 
 <scene version="0.5.0">
-	<integrator type="direct">
-		<integer name="bsdfSamples" value="4"/>
-		<integer name="emitterSamples" value="4"/>
-	</integrator>
+    <integrator type="direct"/>
 
 	<bsdf type="diffuse" id="leftWall_material">
 		<rgb name="reflectance" value="1 0.1 0.1"/>
@@ -19,23 +16,7 @@
 		<rgb name="reflectance" value="0.1 1 0.1"/>
 	</bsdf>
 
-	<bsdf type="diffuse" id="floor_material">
-		<rgb name="reflectance" value="1 1 1"/>
-	</bsdf>
-
-	<bsdf type="diffuse" id="ceiling_material">
-		<rgb name="reflectance" value="1 1 1"/>
-	</bsdf>
-
-	<bsdf type="diffuse" id="frontWall_material">
-		<rgb name="reflectance" value="1 1 1"/>
-	</bsdf>
-
-	<bsdf type="diffuse" id="shortBox_material">
-		<rgb name="reflectance" value="1 1 1"/>
-	</bsdf>
-
-	<bsdf type="diffuse" id="tallBox_material">
+	<bsdf type="diffuse" id="white_material">
 		<rgb name="reflectance" value="1 1 1"/>
 	</bsdf>
 
@@ -43,21 +24,21 @@
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="0"/>
 
-		<ref name="bsdf" id="ceiling_material"/>
+		<ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<shape type="serialized" id="floor_Mesh_mesh">
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="1"/>
 
-		<ref name="bsdf" id="floor_material"/>
+		<ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<shape type="serialized" id="frontWall_Mesh_mesh">
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="2"/>
 
-		<ref name="bsdf" id="frontWall_material"/>
+		<ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<shape type="serialized" id="leftWall_Mesh_mesh">
@@ -71,9 +52,11 @@
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="4"/>
 
-		<emitter type="area">
-			<rgb name="radiance" value="5 4 3"/>
-		</emitter>
+		<ref name="bsdf" id="white_material"/>
+        
+        <emitter type="area">
+            <rgb name="radiance" value="5 4 3"/>
+        </emitter>
 	</shape>
 
 	<shape type="serialized" id="rightWall_Mesh_mesh">
@@ -87,14 +70,14 @@
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="6"/>
 
-		<ref name="bsdf" id="shortBox_material"/>
+		<ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<shape type="serialized" id="tallBox_Mesh_mesh">
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="7"/>
-
-		<ref name="bsdf" id="tallBox_material"/>
+		
+        <ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<sensor type="perspective">
@@ -105,11 +88,11 @@
 		<float name="nearClip" value="0.1"/>
 		<transform name="toWorld">
 
-			<lookat target="0.0246139, 1.02462, 1.34993" origin="0.0276137, 1.02762, 2.34992" up="-8.99929e-06, 0.999996, -0.00299996"/>
+			<lookat target="0.0246139, 1.02462, 1.34993" origin="0.0276137, 1.02762, 2.34992" up="-8.99909e-06, 0.999996, -0.00299989"/>
 		</transform>
 
 		<sampler type="independent">
-			<integer name="sampleCount" value="64"/>
+			<integer name="sampleCount" value="256"/>
 		</sampler>
 
 		<film type="hdrfilm">

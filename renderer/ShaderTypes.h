@@ -3,9 +3,12 @@
 #include <simd/simd.h>
 
 #ifdef __METAL_VERSION__
+#   define pow metal::pow
 #   define packed_float2(x) packed_float2 x
 #   define packed_float3(x) packed_float3 x
 #else
+#   include <math.h>
+#   define pow powf
 #   define packed_float2(x) float x[2]
 #   define packed_float3(x) float x[3]
 #endif
@@ -57,3 +60,15 @@ struct LightTriangle
 };
 
 #define NOISE_DIMENSIONS 64
+
+float toLinear(float value)
+{
+    return (value < 0.04045f) ? (value / 12.92) : pow((value + 0.055f) / 1.055f, 2.4);
+}
+
+float toSRGB(float value)
+{
+    if (value <= 0.0f) return 0.0f;
+    if (value >= 1.0f) return 1.0f;
+    return (value < 0.0031308) ? (12.92f * value) : (1.055f * pow(value, 1.0f / 2.4f) - 0.055);
+}
