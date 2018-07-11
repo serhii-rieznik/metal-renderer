@@ -162,12 +162,14 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
 {
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
     lightSamplingRays[rayIndex].maxDistance = -1.0f;
-    primaryRays[rayIndex].maxDistance = -1.0f;
 
     device Ray& ray = primaryRays[rayIndex];
     device const Intersection& intersection = intersections[rayIndex];
     if (intersection.distance < DISTANCE_EPSILON)
+    {
+        primaryRays[rayIndex].maxDistance = -1.0f;
         return;
+    }
     
     device const packed_uint3& hitTriangle = indexBuffer[intersection.triangleIndex];
     device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
@@ -178,21 +180,26 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
     ray.sourceIndex[ray.bounce] = intersection.triangleIndex;
     ray.bounce += 1;
     
+    ray.radiance += ray.throughput * material.emissive;
     Vertex hitVertex = interpolate(vertexBuffer[hitTriangle.x], vertexBuffer[hitTriangle.y], vertexBuffer[hitTriangle.z], intersection.coordinates);
     {
         ray.origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
-        ray.direction = generateDirection(noiseSample.wx, hitVertex.n);
+        ray.direction = generateDirection(noiseSample.xy, hitVertex.n);
         ray.minDistance = 0.0f;
         ray.maxDistance = INFINITY;
-        ray.throughput *= material.diffuse;
-        ray.radiance += ray.throughput * material.emissive;
+        
+        // float cosTheta = dot(ray.direction, hitVertex.n);
+        // float bsdf = (1.0 / PI) * cosTheta;
+        // float pdf = cosTheta / PI;
+        
+        ray.throughput *= material.diffuse; // * (bsdf / pdf);
     }
     
-    LightTriangle selectedLightTriangle = selectLightTriangle(noiseSample.x, lightTriangles, sharedData.lightTrianglesCount);
+    LightTriangle selectedLightTriangle = selectLightTriangle(noiseSample.z, lightTriangles, sharedData.lightTrianglesCount);
     if (selectedLightTriangle.index != intersection.triangleIndex)
     {
         device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
-        Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.zw));
+        Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.wx));
         packed_float3 directionToLight = lightVertex.v - hitVertex.v;
         float distanceToLight = length(directionToLight);
         directionToLight /= distanceToLight;
@@ -204,8 +211,9 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
             {
                 float samplePdf = triangleSamplePDF(selectedLightTriangle.area, LdotD, distanceToLight);
                 float LdotN = dot(directionToLight, hitVertex.n);
-                float3 bsdf = material.diffuse / PI;
+                float bsdf = 1.0 / PI;
                 float pdf = selectedLightTriangle.pdf * samplePdf;
+                
                 lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
                 lightSamplingRays[rayIndex].direction = directionToLight;
                 lightSamplingRays[rayIndex].minDistance = 0.0;

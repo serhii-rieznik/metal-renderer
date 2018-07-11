@@ -64,8 +64,12 @@ static const NSString* sceneName = @"cornellbox";
 
 - (void)loadMetalWithView:(nonnull MTKView *)view;
 {
-    view.depthStencilPixelFormat = MTLPixelFormatInvalid;
+#if (MANUAL_SRGB)
     view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
+#else
+    view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+#endif
+    view.depthStencilPixelFormat = MTLPixelFormatInvalid;
     view.sampleCount = 1;
     
     size_t noiseBufferSize = NOISE_DIMENSIONS * NOISE_DIMENSIONS * sizeof(vector_float4);
