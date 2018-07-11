@@ -167,10 +167,7 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
     device Ray& ray = primaryRays[rayIndex];
     device const Intersection& intersection = intersections[rayIndex];
     if (intersection.distance < DISTANCE_EPSILON)
-    {
-        primaryRays[rayIndex].radiance = 0.0f;
         return;
-    }
     
     device const packed_uint3& hitTriangle = indexBuffer[intersection.triangleIndex];
     device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
