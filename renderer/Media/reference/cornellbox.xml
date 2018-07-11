@@ -6,7 +6,7 @@
 -->
 
 <scene version="0.5.0">
-    <integrator type="direct"/>
+	<integrator type="path"/>
 
 	<bsdf type="diffuse" id="leftWall_material">
 		<rgb name="reflectance" value="1 0.1 0.1"/>
@@ -53,10 +53,10 @@
 		<integer name="shapeIndex" value="4"/>
 
 		<ref name="bsdf" id="white_material"/>
-        
-        <emitter type="area">
-            <rgb name="radiance" value="5 4 3"/>
-        </emitter>
+
+		<emitter type="area">
+			<rgb name="radiance" value="5 4 3"/>
+		</emitter>
 	</shape>
 
 	<shape type="serialized" id="rightWall_Mesh_mesh">
@@ -76,8 +76,8 @@
 	<shape type="serialized" id="tallBox_Mesh_mesh">
 		<string name="filename" value="cornellbox.serialized"/>
 		<integer name="shapeIndex" value="7"/>
-		
-        <ref name="bsdf" id="white_material"/>
+
+		<ref name="bsdf" id="white_material"/>
 	</shape>
 
 	<sensor type="perspective">
@@ -88,7 +88,7 @@
 		<float name="nearClip" value="0.1"/>
 		<transform name="toWorld">
 
-			<lookat target="0.0246139, 1.02462, 1.34993" origin="0.0276137, 1.02762, 2.34992" up="-8.99909e-06, 0.999996, -0.00299989"/>
+			<lookat target="0 1 0" origin="0 1 2.35" up="0 1 0"/>
 		</transform>
 
 		<sampler type="independent">

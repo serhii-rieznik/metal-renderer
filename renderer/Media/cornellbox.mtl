@@ -1,26 +1,29 @@
 newmtl leftWall
 Kd 1.0 0.1 0.1
+Kx 0 0 0 
 
 newmtl rightWall
 Kd 0.1 1.0 0.1
 Kx 1 1 1
 
 newmtl floor
-Kd 1.0 1.0 1.0
+Kd 1 1 1
+Kx 1 1 1
 
 newmtl ceiling
-Kd 1.0 1.0 1.0
+Kd 1 1 1
+Kx 1 1 1
 
 newmtl frontWall
-Kd 1.0 1.0 1.0
-Ka 0 0 0
+Kd 1 1 1
+Kx 11 0 0
 
 newmtl shortBox
-Kd 1.0 1.0 1.0
+Kd 1 1 1
 Kx 0.6 0.8 1.0
 
 newmtl tallBox
-Kd 1.0 1.0 1.0
+Kd 1 1 1
 Kx 1 0.8 0.6
 
 newmtl light

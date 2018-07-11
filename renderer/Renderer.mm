@@ -8,8 +8,7 @@
 #import <random>
 
 static const NSUInteger MaxBuffersInFlight = 3;
-
-#define ANIMATE_NOISE 1
+static const NSString* sceneName = @"cornellbox";
 
 @implementation Renderer
 {
@@ -20,8 +19,10 @@ static const NSUInteger MaxBuffersInFlight = 3;
     id<MTLComputePipelineState> _rayGenerator;
     id<MTLComputePipelineState> _intersectionHandler;
     id<MTLComputePipelineState> _nextEventHandler;
+    id<MTLComputePipelineState> _finalHandler;
     id<MTLTexture> _image;
-    id<MTLBuffer> _rayBuffer;
+    id<MTLBuffer> _primaryRayBuffer;
+    id<MTLBuffer> _lightSamplingBuffer;
     id<MTLBuffer> _intersectionBuffer;
     id<MTLBuffer> _geometryBuffer;
     id<MTLBuffer> _indexBuffer;
@@ -41,6 +42,8 @@ static const NSUInteger MaxBuffersInFlight = 3;
     uint32_t _frameIndex;
     uint32_t _lightTrianglesCount;
     uint32_t _rayCount;
+    uint32_t _dispatchSizeX;
+    uint32_t _dispatchSizeY;
 }
 
 -(nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)view;
@@ -62,7 +65,7 @@ static const NSUInteger MaxBuffersInFlight = 3;
 - (void)loadMetalWithView:(nonnull MTKView *)view;
 {
     view.depthStencilPixelFormat = MTLPixelFormatInvalid;
-    view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+    view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
     view.sampleCount = 1;
     
     size_t noiseBufferSize = NOISE_DIMENSIONS * NOISE_DIMENSIONS * sizeof(vector_float4);
@@ -94,6 +97,7 @@ static const NSUInteger MaxBuffersInFlight = 3;
     [_perFrameData[1].noise didModifyRange:NSMakeRange(0, [_perFrameData[1].noise length])];
     [_perFrameData[2].noise didModifyRange:NSMakeRange(0, [_perFrameData[2].noise length])];
 
+    NSError *error = NULL;
     id<MTLLibrary> defaultLibrary = [_device newDefaultLibrary];
     
     MTLRenderPipelineDescriptor *pipelineStateDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
@@ -103,22 +107,17 @@ static const NSUInteger MaxBuffersInFlight = 3;
     pipelineStateDescriptor.fragmentFunction = [defaultLibrary newFunctionWithName:@"blitFragment"];
     pipelineStateDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat;
     pipelineStateDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat;
-    
-    NSError *error = NULL;
     _blitPipeline = [_device newRenderPipelineStateWithDescriptor:pipelineStateDescriptor error:&error];
-    if (_blitPipeline == nil)
-    {
-        NSLog(@"Failed to created blit pipeline state, error %@", error);
-    }
     
-    id<MTLFunction> rayGeneratorFunction = [defaultLibrary newFunctionWithName:@"rayGenerator"];
-    _rayGenerator = [_device newComputePipelineStateWithFunction:rayGeneratorFunction error:&error];
+    auto createComputeEncoder = [&](NSString* function) {
+        id<MTLFunction> rayGeneratorFunction = [defaultLibrary newFunctionWithName:function];
+        return [_device newComputePipelineStateWithFunction:rayGeneratorFunction error:&error];
+    };
     
-    id<MTLFunction> intersectionHandlerFunction = [defaultLibrary newFunctionWithName:@"intersectionHandler"];
-    _intersectionHandler = [_device newComputePipelineStateWithFunction:intersectionHandlerFunction error:&error];
-
-    id<MTLFunction> nextEventHandlerFunction = [defaultLibrary newFunctionWithName:@"nextEventEstimationHandler"];
-    _nextEventHandler = [_device newComputePipelineStateWithFunction:nextEventHandlerFunction error:&error];
+    _rayGenerator = createComputeEncoder(@"rayGenerator");
+    _intersectionHandler = createComputeEncoder(@"intersectionHandler");
+    _nextEventHandler = createComputeEncoder(@"nextEventEstimationHandler");
+    _finalHandler = createComputeEncoder(@"accumulateImage");
 
     _commandQueue = [_device newCommandQueue];
 }
@@ -143,7 +142,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     std::vector<Material> materials;
     std::vector<LightTriangle> lightTriangles;
     
-    NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:@"Media/CornellBox-Water" withExtension:@"obj"];
+    NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:[NSString stringWithFormat:@"Media/%@", sceneName] withExtension:@"obj"];
     SCNScene* scene = [SCNScene sceneWithURL:assetUrl options:nil error:nil];
     SCNNode* rootGeometryNode = [[[scene rootNode] childNodes] objectAtIndex:0]; // hopefully it is fine ^_^
     SCNGeometry* geometry = [rootGeometryNode geometry];
@@ -325,6 +324,10 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 
 - (void)drawInMTKView:(nonnull MTKView *)view
 {
+#if (MAX_FRAMES > 0)
+    if (_frameIndex >= MAX_FRAMES) return;
+#endif
+    
     dispatch_semaphore_wait(_inFlightSemaphore, DISPATCH_TIME_FOREVER);
     
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
@@ -347,77 +350,81 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     [computeEncoder setLabel:@"Ray generator"];
     [computeEncoder pushDebugGroup:@"Generate rays"];
     {
-        [computeEncoder setBuffer:_rayBuffer offset:0 atIndex:0];
+        [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:0];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].noise offset:0 atIndex:2];
         [computeEncoder setComputePipelineState:_rayGenerator];
-        [computeEncoder dispatchThreads:MTLSizeMake(view.drawableSize.width, view.drawableSize.height, 1)
-                  threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
     
-    [_intersector encodeIntersectionToCommandBuffer:commandBuffer
-                                   intersectionType:MPSIntersectionTypeNearest
-                                          rayBuffer:_rayBuffer
-                                    rayBufferOffset:0
-                                 intersectionBuffer:_intersectionBuffer
-                           intersectionBufferOffset:0
-                                           rayCount:_rayCount
-                              accelerationStructure:_accelerationStructure];
-    
-    // handle intersections and do next event estimation
-    computeEncoder = [commandBuffer computeCommandEncoder];
-    [computeEncoder setLabel:@"Intersection handler"];
-    [computeEncoder pushDebugGroup:@"Handle intersection"];
+    for (uint32_t i = 0; i < MAX_PATH_LENGTH; ++i)
     {
-        [computeEncoder setTexture:_image atIndex:0];
-        [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
-        [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:1];
-        [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:2];
-        [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
-        [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
-        [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:5];
-        [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
-        [computeEncoder setBuffer:_rayBuffer offset:0 atIndex:7];
-        [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].noise offset:0 atIndex:8];
-        [computeEncoder setComputePipelineState:_intersectionHandler];
-        [computeEncoder dispatchThreads:MTLSizeMake(view.drawableSize.width, view.drawableSize.height, 1)
-                  threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        [_intersector encodeIntersectionToCommandBuffer:commandBuffer intersectionType:MPSIntersectionTypeNearest
+                                              rayBuffer:_primaryRayBuffer rayBufferOffset:0
+                                     intersectionBuffer:_intersectionBuffer intersectionBufferOffset:0
+                                               rayCount:_rayCount accelerationStructure:_accelerationStructure];
+        
+        // handle intersections and do next event estimation
+        computeEncoder = [commandBuffer computeCommandEncoder];
+        [computeEncoder setLabel:@"Intersection handler"];
+        {
+            [computeEncoder setTexture:_image atIndex:0];
+            [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
+            [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:1];
+            [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:2];
+            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+            [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
+            [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:5];
+            [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
+            [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:7];
+            [computeEncoder setBuffer:_perFrameData[(_frameIndex + i) % MaxBuffersInFlight].noise offset:0 atIndex:8];
+            [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:9];
+            [computeEncoder setComputePipelineState:_intersectionHandler];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+            // [computeEncoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+        }
+        [computeEncoder endEncoding];
+        
+#   if (NEXT_EVENT_ESTIMATION)
+        [_intersector encodeIntersectionToCommandBuffer:commandBuffer
+                                       intersectionType:MPSIntersectionTypeNearest
+                                              rayBuffer:_lightSamplingBuffer
+                                        rayBufferOffset:0
+                                     intersectionBuffer:_intersectionBuffer
+                               intersectionBufferOffset:0
+                                               rayCount:_rayCount
+                                  accelerationStructure:_accelerationStructure];
+        
+        // handle next event estimation
+        computeEncoder = [commandBuffer computeCommandEncoder];
+        [computeEncoder setLabel:@"Next event estimation"];
+        {
+            [computeEncoder setTexture:_image atIndex:0];
+            [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
+            [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:1];
+            [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:2];
+            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+            [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
+            [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:5];
+            [computeEncoder setComputePipelineState:_nextEventHandler];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        }
+        [computeEncoder endEncoding];
+#   endif
     }
-    [computeEncoder popDebugGroup];
-    [computeEncoder endEncoding];
     
-    // next event estimation
-    [_intersector encodeIntersectionToCommandBuffer:commandBuffer
-                                   intersectionType:MPSIntersectionTypeNearest
-                                          rayBuffer:_rayBuffer
-                                    rayBufferOffset:0
-                                 intersectionBuffer:_intersectionBuffer
-                           intersectionBufferOffset:0
-                                           rayCount:_rayCount
-                              accelerationStructure:_accelerationStructure];
-    
-    // handle next event estimation
+    // final image gathering
     computeEncoder = [commandBuffer computeCommandEncoder];
-    [computeEncoder setLabel:@"Next event estimation"];
-    [computeEncoder pushDebugGroup:@"Next event estimation"];
+    [computeEncoder setLabel:@"Final image accumulation"];
+    [computeEncoder pushDebugGroup:@"Final"];
     {
         [computeEncoder setTexture:_image atIndex:0];
-        [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
-        [computeEncoder setBuffer:_rayBuffer offset:0 atIndex:1];
-        [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:2];
-        [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
-        [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
-        [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].noise offset:0 atIndex:5];
-        /*
-        [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:1];
-        [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:2];
-        [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
-        // */
-        [computeEncoder setComputePipelineState:_nextEventHandler];
-        [computeEncoder dispatchThreads:MTLSizeMake(view.drawableSize.width, view.drawableSize.height, 1)
-                  threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:0];
+        [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
+        [computeEncoder setComputePipelineState:_finalHandler];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
@@ -440,15 +447,18 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 
 - (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
 {
-    MTLTextureDescriptor* imageDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:size.width height:size.height mipmapped:NO];
+    _dispatchSizeX = uint32_t(CONTENT_SCALE * size.width);
+    _dispatchSizeY = uint32_t(CONTENT_SCALE * size.height);
+
+    MTLTextureDescriptor* imageDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:_dispatchSizeX height:_dispatchSizeY mipmapped:NO];
     imageDescriptor.usage |= MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
     _image = [_device newTextureWithDescriptor:imageDescriptor];
-    
-    _rayCount = (uint32_t)(size.width) * (uint32_t)(size.height);
-    _rayBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
+        
+    _rayCount = _dispatchSizeX * _dispatchSizeY;
+    _primaryRayBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
+    _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
-
 }
 
 @end

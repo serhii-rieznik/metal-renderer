@@ -13,6 +13,21 @@
 #   define packed_float3(x) float x[3]
 #endif
 
+#define ENABLE_TONE_MAPPING     false
+
+#define ACCUMULATE_IMAGE        true
+#define NEXT_EVENT_ESTIMATION   true
+#define MANUAL_SRGB             true 
+
+#define DISTANCE_EPSILON        0.001
+#define ANGLE_EPSILON           0.00174533
+#define PI                      3.1415926
+#define NOISE_DIMENSIONS        64
+#define ANIMATE_NOISE           1
+#define MAX_FRAMES              0
+#define MAX_PATH_LENGTH         8
+#define CONTENT_SCALE           (1.0f / 2.0f)
+
 struct SharedData
 {
     unsigned int frameIndex;
@@ -28,7 +43,9 @@ struct Ray
     float maxDistance;
     packed_float3(throughput);
     packed_float3(radiance);
+    unsigned int sourceIndex[4];
     unsigned int targetIndex;
+    unsigned int bounce;
 };
 
 struct Intersection
@@ -58,8 +75,6 @@ struct LightTriangle
     float cdf;
     unsigned int index;
 };
-
-#define NOISE_DIMENSIONS 64
 
 float toLinear(float value)
 {
