@@ -14,19 +14,30 @@
 #endif
 
 #define ENABLE_TONE_MAPPING     false
+#define MANUAL_SRGB             false
 
 #define ACCUMULATE_IMAGE        true
-#define NEXT_EVENT_ESTIMATION   true
-#define MANUAL_SRGB             true 
 
-#define DISTANCE_EPSILON        0.001
+#define DISTANCE_EPSILON        0.0001
 #define ANGLE_EPSILON           0.00174533
 #define PI                      3.1415926
 #define NOISE_DIMENSIONS        64
 #define ANIMATE_NOISE           1
+
 #define MAX_FRAMES              0
 #define MAX_PATH_LENGTH         8
+
 #define CONTENT_SCALE           (1.0f / 2.0f)
+
+#define COMPARE_DISABLED        0
+#define COMPARE_ABSOLUTE_VALUE  1 // just compare abs(color - ref) or abs(ref - color)
+#define COMPARE_REF_TO_COLOR    2 // visible, if output is darker than reference
+#define COMPARE_COLOR_TO_REF    3 // visible, if reference is darker than output
+#define COMPARE_LUMINANCE       4 // red/green, red - output brighter, green - reference brighter
+#define COMPARISON_MODE         COMPARE_ABSOLUTE_VALUE
+#define COMPARISON_SCALE        1
+
+#define DIFFUSE_COSINE_WEIGHTED 1
 
 struct SharedData
 {
@@ -43,7 +54,6 @@ struct Ray
     float maxDistance;
     packed_float3(throughput);
     packed_float3(radiance);
-    unsigned int sourceIndex[4];
     unsigned int targetIndex;
     unsigned int bounce;
 };
@@ -86,4 +96,37 @@ float toSRGB(float value)
     if (value <= 0.0f) return 0.0f;
     if (value >= 1.0f) return 1.0f;
     return (value < 0.0031308) ? (12.92f * value) : (1.055f * pow(value, 1.0f / 2.4f) - 0.055);
+}
+
+float halton(unsigned int index, unsigned int base)
+{
+    float f = 1.0f;
+    float r = 0.0f;
+    float fbase = float(base);
+    
+    while (index > 0)
+    {
+        f = f / fbase;
+        r = r + f * (index % base);
+        index = index / base;
+    }
+    
+    return r;
+}
+
+
+float vanDerCorput(unsigned int t, unsigned int b)
+{
+    float r = 0.0;
+    float base_inv = 1.0 / float(b);
+    
+    while (t > 0)
+    {
+        unsigned int d = ( t % b );
+        r = r + float(d) * base_inv;
+        base_inv = base_inv / b;
+        t = t / b;
+    }
+    
+    return r;
 }

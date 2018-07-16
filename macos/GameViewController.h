@@ -5,4 +5,6 @@
 
 @interface GameViewController : NSViewController
 
+- (IBAction)saveCurrentImage:(id)sender;
+
 @end

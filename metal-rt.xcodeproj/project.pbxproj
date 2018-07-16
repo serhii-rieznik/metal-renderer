@@ -460,13 +460,22 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				HEADER_SEARCH_PATHS = "${PROJECT_DIR}/external/include";
 				INFOPLIST_FILE = "$(SRCROOT)/macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "${PROJECT_DIR}/external/lib";
 				MACOSX_DEPLOYMENT_TARGET = 10.14;
 				MTL_ENABLE_DEBUG_INFO = YES;
+				OTHER_LDFLAGS = (
+					"-lIlmImf",
+					"-lIlmThread",
+					"-lIex",
+					"-lHalf",
+					"-lz",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "serhii.rieznik.metal-rt";
 				PRODUCT_NAME = "metal-rt";
 				SDKROOT = macosx;
@@ -480,13 +489,22 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				HEADER_SEARCH_PATHS = "${PROJECT_DIR}/external/include";
 				INFOPLIST_FILE = "$(SRCROOT)/macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "${PROJECT_DIR}/external/lib";
 				MACOSX_DEPLOYMENT_TARGET = 10.14;
 				MTL_ENABLE_DEBUG_INFO = YES;
+				OTHER_LDFLAGS = (
+					"-lIlmImf",
+					"-lIlmThread",
+					"-lIex",
+					"-lHalf",
+					"-lz",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "serhii.rieznik.metal-rt";
 				PRODUCT_NAME = "metal-rt";
 				SDKROOT = macosx;

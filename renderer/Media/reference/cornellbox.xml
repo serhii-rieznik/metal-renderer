@@ -6,14 +6,19 @@
 -->
 
 <scene version="0.5.0">
-	<integrator type="path"/>
+	<integrator type="adaptive">
+		<integrator type="path">
+			<integer name="maxDepth" value="8"/>
+			<integer name="rrDepth" value="16"/>
+		</integrator>
+	</integrator>
 
 	<bsdf type="diffuse" id="leftWall_material">
-		<rgb name="reflectance" value="1 0.1 0.1"/>
+		<rgb name="reflectance" value="1 0 0"/>
 	</bsdf>
 
 	<bsdf type="diffuse" id="rightWall_material">
-		<rgb name="reflectance" value="0.1 1 0.1"/>
+		<rgb name="reflectance" value="0 1 0"/>
 	</bsdf>
 
 	<bsdf type="diffuse" id="white_material">
@@ -82,17 +87,17 @@
 
 	<sensor type="perspective">
 		<float name="farClip" value="100"/>
-		<float name="focusDistance" value="9.20526"/>
+		<float name="focusDistance" value="2.35"/>
 		<float name="fov" value="90"/>
 		<string name="fovAxis" value="x"/>
 		<float name="nearClip" value="0.1"/>
 		<transform name="toWorld">
 
-			<lookat target="0 1 0" origin="0 1 2.35" up="0 1 0"/>
+			<lookat target="0, 1, 1.35" origin="0, 1, 2.35" up="0, 1, 0"/>
 		</transform>
 
 		<sampler type="independent">
-			<integer name="sampleCount" value="256"/>
+			<integer name="sampleCount" value="32"/>
 		</sampler>
 
 		<film type="hdrfilm">

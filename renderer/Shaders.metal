@@ -27,22 +27,44 @@ vertex BlitVertexOut blitVertex(uint vertexIndex [[vertex_id]])
     return out;
 }
 
-fragment float4 blitFragment(BlitVertexOut in [[stage_in]], texture2d<float> image [[texture(0)]])
+fragment float4 blitFragment(BlitVertexOut in [[stage_in]]
+                             , constant SharedData& sharedData [[buffer(0)]]
+                             , texture2d<float> image [[texture(0)]]
+#                            if (COMPARISON_MODE != COMPARE_DISABLED)
+                             , texture2d<float> reference [[texture(1)]]
+#                            endif
+                             )
 {
     constexpr sampler linearSampler(coord::normalized, filter::nearest);
     float4 color = image.sample(linearSampler, in.coords);
-
+    
 #if (ENABLE_TONE_MAPPING)
     color = 1.0 - exp(-color);
 #endif
-
+    
 #if (MANUAL_SRGB)
     color.x = toSRGB(color.x);
     color.y = toSRGB(color.y);
     color.z = toSRGB(color.z);
 #endif
-
+    
+#if (COMPARISON_MODE == COMPARE_ABSOLUTE_VALUE)
+    float4 ref = reference.sample(linearSampler, in.coords);
+    return abs(color - ref) * float(COMPARISON_SCALE);
+#elif (COMPARISON_MODE == COMPARE_REF_TO_COLOR)
+    float4 ref = reference.sample(linearSampler, in.coords);
+    return max(0.0, ref - color) * float(COMPARISON_SCALE);
+#elif (COMPARISON_MODE == COMPARE_COLOR_TO_REF)
+    float4 ref = reference.sample(linearSampler, in.coords);
+    return max(0.0, color - ref) * float(COMPARISON_SCALE);
+#elif (COMPARISON_MODE == COMPARE_LUMINANCE)
+    float4 ref = reference.sample(linearSampler, in.coords);
+    float lumColor = dot(color.xyz, float3(0.2126, 0.7152, 0.0722));
+    float lumRef = dot(ref.xyz, float3(0.2126, 0.7152, 0.0722));
+    return float4(max(0.0, lumColor - lumRef), max(0.0, lumRef - lumColor), 0.0, 1.0) * float(COMPARISON_SCALE);
+#else
     return color;
+#endif
 }
 
 /*
@@ -55,7 +77,6 @@ kernel void rayGenerator(device Ray* rays [[buffer(0)]],
                          uint2 wholeSize [[threads_per_grid]])
 {
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
-    float2 normalizedCoords = ((float2)(threadId) / (float2)(wholeSize)) * 2.0f - 1.0f;
     float aspect = float(wholeSize.y) / float(wholeSize.x);
     
     float t = 0.0f; // sin(sharedData.time) * 0.1;
@@ -66,7 +87,9 @@ kernel void rayGenerator(device Ray* rays [[buffer(0)]],
     float3 view = float3(st, 0.0, -ct);
 
     float4 noiseSample = noise[(threadId.x % NOISE_DIMENSIONS) + (threadId.y % NOISE_DIMENSIONS) * NOISE_DIMENSIONS];
-    float2 dudv = 2.0f * (noiseSample.xy * 2.0 - 1.0) / float2(wholeSize);
+    float2 dudv = (noiseSample.xy * 2.0 - 1.0) / float2(wholeSize);
+
+    float2 normalizedCoords = float2(2 * threadId.x, 2 * threadId.y) / float2(wholeSize.x - 1, wholeSize.y - 1) - 1.0f;
 
     rays[rayIndex].origin = up - view * 2.35;
     rays[rayIndex].direction = normalize(side * (dudv.x + normalizedCoords.x) + up * (dudv.y + normalizedCoords.y * aspect) + view);
@@ -75,10 +98,6 @@ kernel void rayGenerator(device Ray* rays [[buffer(0)]],
     rays[rayIndex].throughput = 1.0;
     rays[rayIndex].radiance = 0.0;
     rays[rayIndex].bounce = 0;
-    rays[rayIndex].sourceIndex[0] = -1;
-    rays[rayIndex].sourceIndex[1] = -1;
-    rays[rayIndex].sourceIndex[2] = -1;
-    rays[rayIndex].sourceIndex[3] = -1;
     rays[rayIndex].targetIndex = -1;
 }
 
@@ -140,10 +159,22 @@ float3 generateDirection(float2 smp, thread const float3& n)
     float3 v;
     buildOrthonormalBasis(n, u, v);
     
+#if (DIFFUSE_COSINE_WEIGHTED)
     float cosTheta = sqrt(smp.y);
+#else
+    float cosTheta = smp.y;
+#endif
+    
     float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
     float phi = smp.x * PI * 2.0;
     return (u * cos(phi) + v * sin(phi)) * sinTheta + n * cosTheta;
+}
+
+float balanceHeuristic(float fPdf, float gPdf)
+{
+    float f2 = fPdf * fPdf;
+    float g2 = gPdf * gPdf;
+    return f2 / (f2 + g2);
 }
 
 kernel void intersectionHandler(texture2d<float, access::read_write> image [[texture(0)]],
@@ -174,55 +205,67 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
     device const packed_uint3& hitTriangle = indexBuffer[intersection.triangleIndex];
     device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
 
-    uint noiseIndex = ((threadId.x + sharedData.frameIndex + ray.bounce) % NOISE_DIMENSIONS) + ((threadId.y + ray.bounce) % NOISE_DIMENSIONS) * NOISE_DIMENSIONS;
+    uint noiseIndex =
+        ((threadId.x + ray.bounce + sharedData.frameIndex / 3) % NOISE_DIMENSIONS) +
+        ((threadId.y + ray.bounce + sharedData.frameIndex / 5) % NOISE_DIMENSIONS) * NOISE_DIMENSIONS;
+    
     device const float4& noiseSample = noise[noiseIndex];
 
-    ray.sourceIndex[ray.bounce] = intersection.triangleIndex;
-    ray.bounce += 1;
-    
-    ray.radiance += ray.throughput * material.emissive;
     Vertex hitVertex = interpolate(vertexBuffer[hitTriangle.x], vertexBuffer[hitTriangle.y], vertexBuffer[hitTriangle.z], intersection.coordinates);
     {
+        if (ray.bounce == 0) // show directly visible emitters
+        {
+            ray.radiance += ray.throughput * material.emissive;
+        }
+        
         ray.origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
         ray.direction = generateDirection(noiseSample.xy, hitVertex.n);
         ray.minDistance = 0.0f;
         ray.maxDistance = INFINITY;
+        ray.bounce += 1;
+
+        float cosTheta = dot(ray.direction, hitVertex.n);
+        float bsdf = (1.0f / PI) * cosTheta;
+
+#   if (DIFFUSE_COSINE_WEIGHTED)
+        float pdf = (1.0f / PI) * cosTheta;
+#   else
+        float pdf = 1.0f / (2.0f * PI);
+#   endif
         
-        // float cosTheta = dot(ray.direction, hitVertex.n);
-        // float bsdf = (1.0 / PI) * cosTheta;
-        // float pdf = cosTheta / PI;
-        
-        ray.throughput *= material.diffuse; // * (bsdf / pdf);
+        ray.throughput *= material.diffuse * (bsdf / pdf);
     }
+    
+    if (ray.bounce + 1 > MAX_PATH_LENGTH)
+        return;
     
     LightTriangle selectedLightTriangle = selectLightTriangle(noiseSample.z, lightTriangles, sharedData.lightTrianglesCount);
-    if (selectedLightTriangle.index != intersection.triangleIndex)
-    {
-        device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
-        Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.wx));
-        packed_float3 directionToLight = lightVertex.v - hitVertex.v;
-        float distanceToLight = length(directionToLight);
-        directionToLight /= distanceToLight;
+    if (selectedLightTriangle.index == intersection.triangleIndex)
+        return;
     
-        if (distanceToLight >= DISTANCE_EPSILON)
-        {
-            float LdotD = -dot(directionToLight, lightVertex.n);
-            if (LdotD >= ANGLE_EPSILON)
-            {
-                float samplePdf = triangleSamplePDF(selectedLightTriangle.area, LdotD, distanceToLight);
-                float LdotN = dot(directionToLight, hitVertex.n);
-                float bsdf = 1.0 / PI;
-                float pdf = selectedLightTriangle.pdf * samplePdf;
-                
-                lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
-                lightSamplingRays[rayIndex].direction = directionToLight;
-                lightSamplingRays[rayIndex].minDistance = 0.0;
-                lightSamplingRays[rayIndex].maxDistance = INFINITY;
-                lightSamplingRays[rayIndex].targetIndex = selectedLightTriangle.index;
-                lightSamplingRays[rayIndex].throughput = ray.throughput * (bsdf / pdf * LdotN);
-            }
-        }
-    }
+    device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
+    Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.wx));
+    packed_float3 directionToLight = lightVertex.v - hitVertex.v;
+    float distanceToLight = length(directionToLight);
+    directionToLight /= distanceToLight;
+    
+    if (distanceToLight < DISTANCE_EPSILON)
+        return;
+
+    float LdotD = -dot(directionToLight, lightVertex.n);
+    if (LdotD < ANGLE_EPSILON)
+        return;
+
+    float cosTheta = dot(directionToLight, hitVertex.n);
+    float lightSampleBsdf = (1.0f / PI) * cosTheta;
+    float lightSamplePdf = selectedLightTriangle.pdf * triangleSamplePDF(selectedLightTriangle.area, LdotD, distanceToLight);
+    
+    lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
+    lightSamplingRays[rayIndex].direction = directionToLight;
+    lightSamplingRays[rayIndex].minDistance = 0.0;
+    lightSamplingRays[rayIndex].maxDistance = INFINITY;
+    lightSamplingRays[rayIndex].targetIndex = selectedLightTriangle.index;
+    lightSamplingRays[rayIndex].throughput = ray.throughput * (lightSampleBsdf / lightSamplePdf);
 }
 
 kernel void nextEventEstimationHandler(texture2d<float, access::read_write> image [[texture(0)]],
@@ -235,7 +278,6 @@ kernel void nextEventEstimationHandler(texture2d<float, access::read_write> imag
                                        uint2 threadId [[thread_position_in_grid]],
                                        uint2 wholeSize [[threads_per_grid]])
 {
-#if (NEXT_EVENT_ESTIMATION)
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
     device const Intersection& intersection = intersections[rayIndex];
     if ((intersection.distance >= DISTANCE_EPSILON) && (intersection.triangleIndex == lightSamplingRays[rayIndex].targetIndex))
@@ -243,7 +285,6 @@ kernel void nextEventEstimationHandler(texture2d<float, access::read_write> imag
         device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
         primaryRays[rayIndex].radiance += lightSamplingRays[rayIndex].throughput * material.emissive;
     }
-#endif
 }
 
 kernel void accumulateImage(texture2d<float, access::read_write> image [[texture(0)]],
@@ -257,7 +298,7 @@ kernel void accumulateImage(texture2d<float, access::read_write> image [[texture
     if (ACCUMULATE_IMAGE && (sharedData.frameIndex > 0))
     {
         float3 stored = image.read(threadId).xyz;
-        color = mix(stored, color, 1.0f / float(sharedData.frameIndex + 1));
+        color = mix(color, stored, float(sharedData.frameIndex) / float(sharedData.frameIndex + 1));
     }
     image.write(float4(color, 1.0), threadId);
 }

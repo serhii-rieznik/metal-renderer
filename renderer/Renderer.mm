@@ -7,8 +7,15 @@
 #import <vector>
 #import <random>
 
+#if (COMPARISON_MODE != COMPARE_DISABLED)
+#   import <OpenEXR/ImfArray.h>
+#   import <OpenEXR/ImfInputFile.h>
+#endif
+
 static const NSUInteger MaxBuffersInFlight = 3;
-static const NSString* sceneName = @"cornellbox";
+static const NSString* sceneName = @"CornellBox-Water";
+// static const NSString* sceneName = @"cornellbox";
+// static const NSString* sceneName = @"white-box";
 
 @implementation Renderer
 {
@@ -21,6 +28,7 @@ static const NSString* sceneName = @"cornellbox";
     id<MTLComputePipelineState> _nextEventHandler;
     id<MTLComputePipelineState> _finalHandler;
     id<MTLTexture> _image;
+    id<MTLTexture> _referenceImage;
     id<MTLBuffer> _primaryRayBuffer;
     id<MTLBuffer> _lightSamplingBuffer;
     id<MTLBuffer> _intersectionBuffer;
@@ -29,6 +37,7 @@ static const NSString* sceneName = @"cornellbox";
     id<MTLBuffer> _materialIndexBuffer;
     id<MTLBuffer> _materialBuffer;
     id<MTLBuffer> _lightTriangles;
+    MTKTextureLoader* _textureLoader;
     
     struct PerFrameData
     {
@@ -44,6 +53,7 @@ static const NSString* sceneName = @"cornellbox";
     uint32_t _rayCount;
     uint32_t _dispatchSizeX;
     uint32_t _dispatchSizeY;
+    BOOL _grabImage;
 }
 
 -(nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)view;
@@ -51,6 +61,7 @@ static const NSString* sceneName = @"cornellbox";
     self = [super init];
     if(self)
     {
+        _grabImage = NO;
         _frameIndex = 0;
         _device = view.device;
         _inFlightSemaphore = dispatch_semaphore_create(MaxBuffersInFlight);
@@ -70,7 +81,10 @@ static const NSString* sceneName = @"cornellbox";
     view.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
 #endif
     view.depthStencilPixelFormat = MTLPixelFormatInvalid;
+    view.preferredFramesPerSecond = 120;
     view.sampleCount = 1;
+    
+    _textureLoader = [[MTKTextureLoader alloc] initWithDevice:_device];
     
     size_t noiseBufferSize = NOISE_DIMENSIONS * NOISE_DIMENSIONS * sizeof(vector_float4);
     for (uint32_t i = 0; i < MaxBuffersInFlight; ++i)
@@ -132,6 +146,99 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     return [device newBufferWithBytes:v.data() length:v.size() * sizeof(T) options:MTLResourceStorageModeManaged];
 };
 
+- (void)loadReferenceImage
+{
+#if (COMPARISON_MODE != COMPARE_DISABLED)
+    NSString* imageName = [NSString stringWithFormat:@"Media/reference/%@-%u", sceneName, MAX_PATH_LENGTH];
+    NSURL* imageUrl = [[NSBundle mainBundle] URLForResource:imageName withExtension:@"exr"];
+    if (imageUrl != nil)
+    {
+        /*
+         CGImageSourceRef imageSource = CGImageSourceCreateWithURL((__bridge CFURLRef)imageUrl, nil);
+         CGImageRef image = CGImageSourceCreateImageAtIndex(imageSource, 0, nil);
+         size_t width = CGImageGetWidth(image);
+         size_t height = CGImageGetHeight(image);
+         size_t bpp = CGImageGetBitsPerPixel(image);
+         assert(bpp == 48);
+         
+         size_t bitsPerComponent = CGImageGetBitsPerComponent(image);
+         assert(bitsPerComponent == 16);
+         
+         size_t rowSize = CGImageGetBytesPerRow(image);
+         assert(rowSize == width * 6);
+         rowSize = width * 8;
+         
+         MTLPixelFormat pixelFormat = MTLPixelFormatRGBA16Float;
+         
+         CGDataProviderRef imageDataProvider = CGImageGetDataProvider(image);
+         CFDataRef imageData = CGDataProviderCopyData(imageDataProvider);
+         const uint16_t* srcData = reinterpret_cast<const uint16_t*>(CFDataGetBytePtr(imageData));
+         
+         #define SWAP_ORDER(A) (((A & 0x00FF) << 8) | ((A & 0xFF00) >> 8))
+         
+         uint16_t* rgbaData = (uint16_t*)calloc(width * height, sizeof(uint64_t));
+         for (size_t y = 0; y < height; ++y)
+         {
+         for (size_t x = 0; x < width; ++x)
+         {
+         size_t i = x + y * width;
+         size_t j = x + (height - y - 1) * width;
+         rgbaData[4 * i + 0] = srcData[3 * j + 0];
+         rgbaData[4 * i + 1] = srcData[3 * j + 1];
+         rgbaData[4 * i + 2] = srcData[3 * j + 2];
+         }
+         }
+         // */
+        
+        //*
+        using namespace Imf_2_2;
+        using namespace Imath;
+        const char* pathToFile = [[imageUrl path] cStringUsingEncoding:NSUTF8StringEncoding];
+        InputFile file(pathToFile);
+        Box2i dw = file.header().dataWindow();
+        int width  = dw.max.x - dw.min.x + 1;
+        int height = dw.max.y - dw.min.y + 1;
+        Array2D<float> rPixels;
+        Array2D<float> gPixels;
+        Array2D<float> bPixels;
+        rPixels.resizeErase(height, width);
+        gPixels.resizeErase(height, width);
+        bPixels.resizeErase(height, width);
+        FrameBuffer frameBuffer;
+        frameBuffer.insert("R", Slice(FLOAT, (char*)(&rPixels[0][0] - dw.min.x - dw.min.y * width), sizeof(rPixels[0][0]) * 1, sizeof(rPixels[0][0]) * width, 1, 1, 0.0f));
+        frameBuffer.insert("G", Slice(FLOAT, (char*)(&gPixels[0][0] - dw.min.x - dw.min.y * width), sizeof(gPixels[0][0]) * 1, sizeof(gPixels[0][0]) * width, 1, 1, 0.0f));
+        frameBuffer.insert("B", Slice(FLOAT, (char*)(&bPixels[0][0] - dw.min.x - dw.min.y * width), sizeof(bPixels[0][0]) * 1, sizeof(bPixels[0][0]) * width, 1, 1, 0.0f));
+        file.setFrameBuffer(frameBuffer);
+        file.readPixels(dw.min.y, dw.max.y);
+        
+        vector_float4* rgbaData = (vector_float4*)calloc(width * height, 4 * sizeof(float));
+        int i = 0;
+        for (int v = 0; v < height; ++v)
+        {
+            for (int u = 0; u < width; ++u)
+            {
+                rgbaData[i].x = rPixels[height - v - 1][u];
+                rgbaData[i].y = gPixels[height - v - 1][u];
+                rgbaData[i].z = bPixels[height - v - 1][u];
+                rgbaData[i].w = 1.0f;
+                ++i;
+            }
+        }
+        // */
+        
+        size_t rowSize = width * sizeof(float) * 4;
+        MTLPixelFormat pixelFormat = MTLPixelFormatRGBA32Float;
+        MTLTextureDescriptor* texDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixelFormat width:width height:height mipmapped:NO];
+        _referenceImage = [_device newTextureWithDescriptor:texDesc];
+        [_referenceImage replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 withBytes:rgbaData bytesPerRow:rowSize];
+        
+        // CFRelease(imageData);
+        
+        free(rgbaData);
+    }
+#endif
+}
+
 - (void)initRaytracing
 {
     struct Vertex
@@ -145,6 +252,8 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     std::vector<uint32_t> materialIndices;
     std::vector<Material> materials;
     std::vector<LightTriangle> lightTriangles;
+    
+    [self loadReferenceImage];
     
     NSURL* assetUrl = [[NSBundle mainBundle] URLForResource:[NSString stringWithFormat:@"Media/%@", sceneName] withExtension:@"obj"];
     SCNScene* scene = [SCNScene sceneWithURL:assetUrl options:nil error:nil];
@@ -313,7 +422,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     
 #if (ANIMATE_NOISE)
     uint64_t timeSeed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-    std::seed_seq ss{uint32_t(timeSeed & 0xffffffff), uint32_t(timeSeed>>32)};
+    std::seed_seq ss{uint32_t(timeSeed & 0xffffffff) ^ (_frameIndex + 1), uint32_t(timeSeed >> 32) ^ (_frameIndex + 3)};
     std::mt19937_64 rng;
     rng.seed(ss);
     std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
@@ -326,29 +435,9 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 #endif
 }
 
-- (void)drawInMTKView:(nonnull MTKView *)view
+- (void)performRaytracing:(id<MTLCommandBuffer>)commandBuffer
 {
-#if (MAX_FRAMES > 0)
-    if (_frameIndex >= MAX_FRAMES) return;
-#endif
-    
-    dispatch_semaphore_wait(_inFlightSemaphore, DISPATCH_TIME_FOREVER);
-    
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    
-    __block dispatch_semaphore_t block_sema = _inFlightSemaphore;
-    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-        dispatch_semaphore_signal(block_sema);
-    }];
-
     [self updateSharedData];
-
-    MTLRenderPassDescriptor* renderPassDescriptor = view.currentRenderPassDescriptor;
-    if (renderPassDescriptor == nil)
-    {
-        [commandBuffer commit];
-        return;
-    }
     
     id<MTLComputeCommandEncoder> computeEncoder = [commandBuffer computeCommandEncoder];
     [computeEncoder setLabel:@"Ray generator"];
@@ -391,7 +480,6 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         }
         [computeEncoder endEncoding];
         
-#   if (NEXT_EVENT_ESTIMATION)
         [_intersector encodeIntersectionToCommandBuffer:commandBuffer
                                        intersectionType:MPSIntersectionTypeNearest
                                               rayBuffer:_lightSamplingBuffer
@@ -416,7 +504,6 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }
         [computeEncoder endEncoding];
-#   endif
     }
     
     // final image gathering
@@ -432,12 +519,39 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
+}
+
+- (void)drawInMTKView:(nonnull MTKView *)view
+{
+#if (MAX_FRAMES > 0)
+    if (_frameIndex >= MAX_FRAMES) return;
+#endif
+    
+    dispatch_semaphore_wait(_inFlightSemaphore, DISPATCH_TIME_FOREVER);
+    
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    
+    __block dispatch_semaphore_t block_sema = _inFlightSemaphore;
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+        dispatch_semaphore_signal(block_sema);
+    }];
+
+    MTLRenderPassDescriptor* renderPassDescriptor = view.currentRenderPassDescriptor;
+    if (renderPassDescriptor == nil)
+    {
+        [commandBuffer commit];
+        return;
+    }
+
+    [self performRaytracing:commandBuffer];
 
     id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
     [renderEncoder pushDebugGroup:@"Blit"];
     {
         [renderEncoder setRenderPipelineState:_blitPipeline];
         [renderEncoder setFragmentTexture:_image atIndex:0];
+        [renderEncoder setFragmentTexture:(_referenceImage == nil) ? _image : _referenceImage atIndex:1];
+        [renderEncoder setFragmentBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:0];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     }
     [renderEncoder popDebugGroup];
@@ -446,7 +560,13 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     [commandBuffer presentDrawable:view.currentDrawable];
     [commandBuffer commit];
     
+    if (_grabImage)
+    {
+        
+    }
+    
     ++_frameIndex;
+    [[NSApp mainWindow] setTitle:[NSString stringWithFormat:@"Frame: %u [max depth: %u]", _frameIndex, MAX_PATH_LENGTH]];
 }
 
 - (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
@@ -456,6 +576,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 
     MTLTextureDescriptor* imageDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float width:_dispatchSizeX height:_dispatchSizeY mipmapped:NO];
     imageDescriptor.usage |= MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    imageDescriptor.storageMode = MTLStorageModeManaged;
     _image = [_device newTextureWithDescriptor:imageDescriptor];
         
     _rayCount = _dispatchSizeX * _dispatchSizeY;
@@ -463,6 +584,11 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
+}
+
+- (void)saveCurrentImage
+{
+    _grabImage = YES;
 }
 
 @end

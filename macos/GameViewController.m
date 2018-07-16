@@ -27,4 +27,9 @@
     _view.delegate = _renderer;
 }
 
+- (IBAction)saveCurrentImage:(id)sender
+{
+    [_renderer saveCurrentImage];
+}
+
 @end
