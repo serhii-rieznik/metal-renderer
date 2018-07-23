@@ -25,7 +25,7 @@
 #define ANIMATE_NOISE           1
 
 #define MAX_FRAMES              0
-#define MAX_PATH_LENGTH         3
+#define MAX_PATH_LENGTH         8
 
 #define CONTENT_SCALE           (1.0f / 2.0f)
 

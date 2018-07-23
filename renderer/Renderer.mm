@@ -13,8 +13,8 @@
 #endif
 
 static const NSUInteger MaxBuffersInFlight = 3;
-// static const NSString* sceneName = @"CornellBox-Water";
 static const NSString* sceneName = @"CornellBox-Water-mirror";
+// static const NSString* sceneName = @"CornellBox-Water";
 // static const NSString* sceneName = @"cornellbox";
 // static const NSString* sceneName = @"white-box";
 
@@ -56,6 +56,10 @@ static const NSString* sceneName = @"CornellBox-Water-mirror";
     uint32_t _rayCount;
     uint32_t _dispatchSizeX;
     uint32_t _dispatchSizeY;
+    float _time;
+    float _frameTime;
+    float _averageRaysPerSecond;
+    float _averageFrameTime;
     BOOL _grabImage;
 }
 
@@ -454,11 +458,15 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 
 - (void)updateSharedData
 {
+    float currentTime = CACurrentMediaTime() - _startupTime;
+    _frameTime = currentTime - _time;
+    _time = currentTime;
+    
     id<MTLBuffer> sharedDataBuffer = _perFrameData[_frameIndex % MaxBuffersInFlight].sharedData;
     SharedData* data = reinterpret_cast<SharedData*>([sharedDataBuffer contents]);
     data->frameIndex = _frameIndex;
     data->lightTrianglesCount = _lightTrianglesCount;
-    data->time = CACurrentMediaTime() - _startupTime;
+    data->time = _time;
     [sharedDataBuffer didModifyRange:NSMakeRange(0, sizeof(SharedData))];
     
 #if (ANIMATE_NOISE)
@@ -634,8 +642,13 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         
     }
     
+    float raysPerSecond = float(_dispatchSizeX * _dispatchSizeY) / _frameTime;
+    _averageRaysPerSecond = 0.5f * (_averageRaysPerSecond + raysPerSecond);
+    _averageFrameTime = 0.5f * (_averageFrameTime + _frameTime);
+    
     ++_frameIndex;
-    [[NSApp mainWindow] setTitle:[NSString stringWithFormat:@"Frame: %u [max depth: %u]", _frameIndex, MAX_PATH_LENGTH]];
+    [[NSApp mainWindow] setTitle:[NSString stringWithFormat:@"Frame: %u [%0.2f Mrays/s, %.2f ms/frame]",
+                                  _frameIndex, _averageRaysPerSecond / 1.0e+6, _averageFrameTime * 1000.f]];
 }
 
 - (void)mtkView:(nonnull MTKView *)view drawableSizeWillChange:(CGSize)size
@@ -654,6 +667,8 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     _bsdfSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
+    _averageRaysPerSecond = 0;
+    _averageFrameTime = 0.0f;
 }
 
 - (void)saveCurrentImage

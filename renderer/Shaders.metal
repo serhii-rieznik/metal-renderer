@@ -59,8 +59,8 @@ fragment float4 blitFragment(BlitVertexOut in [[stage_in]]
     return max(0.0, color - ref) * float(COMPARISON_SCALE);
 #elif (COMPARISON_MODE == COMPARE_LUMINANCE)
     float4 ref = reference.sample(linearSampler, in.coords);
-    float lumColor = dot(color.xyz, float3(0.2126, 0.7152, 0.0722));
-    float lumRef = dot(ref.xyz, float3(0.2126, 0.7152, 0.0722));
+    float lumColor = dot(color.xyz, 1.0 / 3.0); // float3(0.2126, 0.7152, 0.0722));
+    float lumRef = dot(ref.xyz, 1.0 / 3.0); // float3(0.2126, 0.7152, 0.0722));
     return float4(max(0.0, lumColor - lumRef), max(0.0, lumRef - lumColor), 0.0, 1.0) * float(COMPARISON_SCALE);
 #else
     return color;
