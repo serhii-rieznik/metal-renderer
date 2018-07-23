@@ -35,5 +35,5 @@ newmtl light
     Kd 0.7250 0.7100 0.6800
     Ka 10 10 10
 
-newmtl water
+newmtl water_R:0_M:1
     Kd 1.0 1.0 1.0

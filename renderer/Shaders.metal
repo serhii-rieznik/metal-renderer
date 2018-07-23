@@ -153,21 +153,27 @@ void buildOrthonormalBasis(thread const float3& n, thread float3& u, thread floa
     }
 }
 
-float3 generateDirection(float2 smp, thread const float3& n)
+float3 alignWithNormal(thread const float3& n, float cosTheta, float phi)
 {
+    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
+    
     float3 u;
     float3 v;
     buildOrthonormalBasis(n, u, v);
     
-#if (DIFFUSE_COSINE_WEIGHTED)
-    float cosTheta = sqrt(smp.y);
-#else
-    float cosTheta = smp.y;
-#endif
-    
-    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
-    float phi = smp.x * PI * 2.0;
     return (u * cos(phi) + v * sin(phi)) * sinTheta + n * cosTheta;
+}
+
+float3 generateDiffuseBounce(float2 smp, thread const float3& n)
+{
+    float cosTheta = sqrt(smp.y);
+    float phi = smp.x * PI * 2.0;
+    return alignWithNormal(n, cosTheta, phi);
+}
+
+float3 generateMirrorBounce(float3 wIn, float3 n)
+{
+    return reflect(wIn, n);
 }
 
 float balanceHeuristic(float fPdf, float gPdf)
@@ -175,6 +181,90 @@ float balanceHeuristic(float fPdf, float gPdf)
     float f2 = fPdf * fPdf;
     float g2 = gPdf * gPdf;
     return f2 / (f2 + g2);
+}
+
+float materialBSDF(device const Material& material, thread const float3& wI, thread const float3& wO, thread const float3& n)
+{
+    float result = 0.0;
+    
+    switch (material.materialType)
+    {
+        case MATERIAL_MIRROR:
+        {
+            result = abs(dot(reflect(wI, n), wO) - 1.0) < ANGLE_EPSILON ? 1.0 : 0.0;
+            break;
+        }
+            
+        default:
+        {
+            result = 1.0 / PI;
+            break;
+        }
+    }
+    
+    return result * max(0.0, dot(wO, n));
+}
+
+float materialPDF(device const Material& material, thread const float3& wI, thread const float3& wO, thread const float3& n)
+{
+    float result = 0.0;
+    
+    switch (material.materialType)
+    {
+        case MATERIAL_MIRROR:
+        {
+            result = abs(dot(reflect(wI, n), wO) - 1.0) < ANGLE_EPSILON ? 1.0 : 0.0;
+            break;
+        }
+            
+        default:
+        {
+            result = dot(wO, n) / PI;
+            break;
+        }
+    }
+    
+    return result;
+}
+
+float3 generateNextBounce(device const Material& material, thread const float3& wI, thread const float3& n,
+                          thread const float2& noiseSample, thread float& bsdf, thread float& pdf)
+{
+    float3 wO = 0.0;
+    
+    switch (material.materialType)
+    {
+        case MATERIAL_MIRROR:
+        {
+            wO = reflect(wI, n);
+            bsdf = 1.0; // materialBSDF(material, wI, wO, n);
+            pdf = 1.0; // materialPDF(material, wI, wO, n);
+            break;
+        }
+            
+        default:
+        {
+            wO = generateDiffuseBounce(noiseSample, n);
+            bsdf = materialBSDF(material, wI, wO, n);
+            pdf = materialPDF(material, wI, wO, n);
+            break;
+        }
+    }
+    
+    return wO;
+}
+
+float lightTriangleSamplePDF(thread const LightTriangle& tri, thread const float3& source, thread const Vertex& sample,
+                             thread packed_float3& directionToLight)
+{
+    directionToLight = sample.v - source;
+    
+    float distanceToLight = length(directionToLight);
+    directionToLight = normalize(directionToLight);
+    float LdotD = -dot(directionToLight, sample.n);
+    bool validDirection = (distanceToLight >= DISTANCE_EPSILON) && (LdotD >= ANGLE_EPSILON);
+    
+    return validDirection ? tri.pdf * triangleSamplePDF(tri.area, LdotD, distanceToLight) : 0.0f;
 }
 
 kernel void intersectionHandler(texture2d<float, access::read_write> image [[texture(0)]],
@@ -188,6 +278,7 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
                                 device Ray* primaryRays [[buffer(7)]],
                                 device const float4* noise [[buffer(8)]],
                                 device Ray* lightSamplingRays [[buffer(9)]],
+                                device Ray* bsdfSamplingRays [[buffer(10)]],
                                 uint2 threadId [[thread_position_in_grid]],
                                 uint2 wholeSize [[threads_per_grid]])
 {
@@ -204,71 +295,69 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
     
     device const packed_uint3& hitTriangle = indexBuffer[intersection.triangleIndex];
     device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
+    float3 wI = ray.direction;
 
     uint noiseIndex =
         ((threadId.x + ray.bounce + sharedData.frameIndex / 3) % NOISE_DIMENSIONS) +
         ((threadId.y + ray.bounce + sharedData.frameIndex / 5) % NOISE_DIMENSIONS) * NOISE_DIMENSIONS;
     
     device const float4& noiseSample = noise[noiseIndex];
-
+    
     Vertex hitVertex = interpolate(vertexBuffer[hitTriangle.x], vertexBuffer[hitTriangle.y], vertexBuffer[hitTriangle.z], intersection.coordinates);
+    {
+        // light sampling
+        LightTriangle selectedLightTriangle = selectLightTriangle(noiseSample.z, lightTriangles, sharedData.lightTrianglesCount);
+        device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
+        Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.wx));
+        
+        packed_float3 directionToLight;
+        float lPdf = lightTriangleSamplePDF(selectedLightTriangle, hitVertex.v, lightVertex, directionToLight);
+        float bsdf = materialBSDF(material, wI, directionToLight, hitVertex.n);
+        float mPdf = materialPDF(material, wI, directionToLight, hitVertex.n);
+        float weight = balanceHeuristic(lPdf, mPdf);
+        
+        bool validLightTriangle = (lPdf > 0.0f) && (selectedLightTriangle.index != intersection.triangleIndex);
+
+        lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
+        lightSamplingRays[rayIndex].direction = directionToLight;
+        lightSamplingRays[rayIndex].minDistance = 0.0;
+        lightSamplingRays[rayIndex].maxDistance = validLightTriangle ? INFINITY : -1.0;
+        lightSamplingRays[rayIndex].targetIndex = selectedLightTriangle.index;
+        lightSamplingRays[rayIndex].throughput = ray.throughput * material.diffuse * (weight * bsdf / lPdf);
+    }
+    
+    {
+        // bsdf sampling
+        float pdf = 0.0f;
+        float bsdf = 0.0f;
+        bsdfSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
+        bsdfSamplingRays[rayIndex].direction = generateNextBounce(material, wI, hitVertex.n, noiseSample.zw, bsdf, pdf);
+        bsdfSamplingRays[rayIndex].minDistance = 0.0;
+        bsdfSamplingRays[rayIndex].maxDistance = INFINITY;
+        bsdfSamplingRays[rayIndex].throughput = ray.throughput * material.diffuse * bsdf;
+        bsdfSamplingRays[rayIndex].materialPdf = pdf;
+        bsdfSamplingRays[rayIndex].lightPdf = (material.materialType == MATERIAL_MIRROR) ? 0.0 : 1.0;
+        bsdfSamplingRays[rayIndex].targetIndex = intersection.triangleIndex;
+    }
+    
     {
         if (ray.bounce == 0) // show directly visible emitters
         {
             ray.radiance += ray.throughput * material.emissive;
         }
         
+        float bsdf = 0.0f;
+        float pdf = 0.0f;
         ray.origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
-        ray.direction = generateDirection(noiseSample.xy, hitVertex.n);
-        ray.minDistance = 0.0f;
-        ray.maxDistance = INFINITY;
-        ray.bounce += 1;
-
-        float cosTheta = dot(ray.direction, hitVertex.n);
-        float bsdf = (1.0f / PI) * cosTheta;
-
-#   if (DIFFUSE_COSINE_WEIGHTED)
-        float pdf = (1.0f / PI) * cosTheta;
-#   else
-        float pdf = 1.0f / (2.0f * PI);
-#   endif
-        
+        ray.direction = generateNextBounce(material, wI, hitVertex.n, noiseSample.xy, bsdf, pdf);
         ray.throughput *= material.diffuse * (bsdf / pdf);
+        ray.maxDistance = INFINITY;
+        ray.minDistance = 0.0f;
+        ray.bounce += 1;
     }
-    
-    if (ray.bounce + 1 > MAX_PATH_LENGTH)
-        return;
-    
-    LightTriangle selectedLightTriangle = selectLightTriangle(noiseSample.z, lightTriangles, sharedData.lightTrianglesCount);
-    if (selectedLightTriangle.index == intersection.triangleIndex)
-        return;
-    
-    device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
-    Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], barycentric(noiseSample.wx));
-    packed_float3 directionToLight = lightVertex.v - hitVertex.v;
-    float distanceToLight = length(directionToLight);
-    directionToLight /= distanceToLight;
-    
-    if (distanceToLight < DISTANCE_EPSILON)
-        return;
-
-    float LdotD = -dot(directionToLight, lightVertex.n);
-    if (LdotD < ANGLE_EPSILON)
-        return;
-
-    float cosTheta = dot(directionToLight, hitVertex.n);
-    float lightSampleBsdf = (1.0f / PI) * cosTheta;
-    float lightSamplePdf = selectedLightTriangle.pdf * triangleSamplePDF(selectedLightTriangle.area, LdotD, distanceToLight);
-    
-    lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
-    lightSamplingRays[rayIndex].direction = directionToLight;
-    lightSamplingRays[rayIndex].minDistance = 0.0;
-    lightSamplingRays[rayIndex].maxDistance = INFINITY;
-    lightSamplingRays[rayIndex].targetIndex = selectedLightTriangle.index;
-    lightSamplingRays[rayIndex].throughput = ray.throughput * (lightSampleBsdf / lightSamplePdf);
 }
 
-kernel void nextEventEstimationHandler(texture2d<float, access::read_write> image [[texture(0)]],
+kernel void lightSamplingHandler(texture2d<float, access::read_write> image [[texture(0)]],
                                        device const Intersection* intersections [[buffer(0)]],
                                        device Ray* primaryRays [[buffer(1)]],
                                        constant SharedData& sharedData [[buffer(2)]],
@@ -285,6 +374,48 @@ kernel void nextEventEstimationHandler(texture2d<float, access::read_write> imag
         device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
         primaryRays[rayIndex].radiance += lightSamplingRays[rayIndex].throughput * material.emissive;
     }
+}
+
+kernel void bsdfSamplingHandler(texture2d<float, access::read_write> image [[texture(0)]],
+                                device const Intersection* intersections [[buffer(0)]],
+                                device Ray* primaryRays [[buffer(1)]],
+                                constant SharedData& sharedData [[buffer(2)]],
+                                device const uint* materialIndexBuffer [[buffer(3)]],
+                                device const Material* materialBuffer [[buffer(4)]],
+                                device const Ray* bsdfSamplingRays [[buffer(5)]],
+                                device const LightTriangle* lightTriangles [[buffer(6)]],
+                                device const Vertex* vertexBuffer [[buffer(7)]],
+                                device const packed_uint3* indexBuffer [[buffer(8)]],
+                                uint2 threadId [[thread_position_in_grid]],
+                                uint2 wholeSize [[threads_per_grid]])
+{
+    uint rayIndex = threadId.y * wholeSize.x + threadId.x;
+    device const Intersection& intersection = intersections[rayIndex];
+    if (intersection.distance < DISTANCE_EPSILON) return;
+    if (intersection.triangleIndex == bsdfSamplingRays[rayIndex].targetIndex) return;
+
+    device const Material& material = materialBuffer[materialIndexBuffer[intersection.triangleIndex]];
+    if (dot(material.emissive, material.emissive) < DISTANCE_EPSILON) return;
+    
+    LightTriangle selectedLightTriangle;
+    for (uint i = 0; i < sharedData.lightTrianglesCount; ++i)
+    {
+        if (intersection.triangleIndex == lightTriangles[i].index)
+        {
+            selectedLightTriangle = lightTriangles[i];
+            break;
+        }
+    }
+    
+    device const packed_uint3& lightTriangle = indexBuffer[selectedLightTriangle.index];
+    Vertex lightVertex = interpolate(vertexBuffer[lightTriangle.x], vertexBuffer[lightTriangle.y], vertexBuffer[lightTriangle.z], intersection.coordinates);
+    
+    packed_float3 directionToLight;
+    float mPdf = bsdfSamplingRays[rayIndex].materialPdf;
+    float lPdf = bsdfSamplingRays[rayIndex].lightPdf * lightTriangleSamplePDF(selectedLightTriangle, bsdfSamplingRays[rayIndex].origin, lightVertex, directionToLight);
+    float weight = balanceHeuristic(mPdf, lPdf);
+    
+    primaryRays[rayIndex].radiance += material.emissive * bsdfSamplingRays[rayIndex].throughput * weight;
 }
 
 kernel void accumulateImage(texture2d<float, access::read_write> image [[texture(0)]],

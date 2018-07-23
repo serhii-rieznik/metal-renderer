@@ -19,13 +19,13 @@
 #define ACCUMULATE_IMAGE        true
 
 #define DISTANCE_EPSILON        0.0001
-#define ANGLE_EPSILON           0.00174533
+#define ANGLE_EPSILON           0.00003807693583
 #define PI                      3.1415926
 #define NOISE_DIMENSIONS        64
 #define ANIMATE_NOISE           1
 
 #define MAX_FRAMES              0
-#define MAX_PATH_LENGTH         8
+#define MAX_PATH_LENGTH         3
 
 #define CONTENT_SCALE           (1.0f / 2.0f)
 
@@ -34,10 +34,11 @@
 #define COMPARE_REF_TO_COLOR    2 // visible, if output is darker than reference
 #define COMPARE_COLOR_TO_REF    3 // visible, if reference is darker than output
 #define COMPARE_LUMINANCE       4 // red/green, red - output brighter, green - reference brighter
-#define COMPARISON_MODE         COMPARE_ABSOLUTE_VALUE
-#define COMPARISON_SCALE        1
+#define COMPARISON_MODE         COMPARE_DISABLED
+#define COMPARISON_SCALE        10
 
-#define DIFFUSE_COSINE_WEIGHTED 1
+#define MATERIAL_DIFFUSE    0
+#define MATERIAL_MIRROR     1
 
 struct SharedData
 {
@@ -56,6 +57,8 @@ struct Ray
     packed_float3(radiance);
     unsigned int targetIndex;
     unsigned int bounce;
+    float materialPdf;
+    float lightPdf;
 };
 
 struct Intersection
@@ -76,6 +79,7 @@ struct Material
 {
     packed_float3(diffuse);
     packed_float3(emissive);
+    unsigned int materialType;
 };
 
 struct LightTriangle

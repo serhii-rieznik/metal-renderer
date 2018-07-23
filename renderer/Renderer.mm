@@ -13,7 +13,8 @@
 #endif
 
 static const NSUInteger MaxBuffersInFlight = 3;
-static const NSString* sceneName = @"CornellBox-Water";
+// static const NSString* sceneName = @"CornellBox-Water";
+static const NSString* sceneName = @"CornellBox-Water-mirror";
 // static const NSString* sceneName = @"cornellbox";
 // static const NSString* sceneName = @"white-box";
 
@@ -25,12 +26,14 @@ static const NSString* sceneName = @"CornellBox-Water";
     id<MTLRenderPipelineState> _blitPipeline;
     id<MTLComputePipelineState> _rayGenerator;
     id<MTLComputePipelineState> _intersectionHandler;
-    id<MTLComputePipelineState> _nextEventHandler;
+    id<MTLComputePipelineState> _lightSamplingHandler;
+    id<MTLComputePipelineState> _bsdfSamplingHandler;
     id<MTLComputePipelineState> _finalHandler;
     id<MTLTexture> _image;
     id<MTLTexture> _referenceImage;
     id<MTLBuffer> _primaryRayBuffer;
     id<MTLBuffer> _lightSamplingBuffer;
+    id<MTLBuffer> _bsdfSamplingBuffer;
     id<MTLBuffer> _intersectionBuffer;
     id<MTLBuffer> _geometryBuffer;
     id<MTLBuffer> _indexBuffer;
@@ -134,7 +137,8 @@ static const NSString* sceneName = @"CornellBox-Water";
     
     _rayGenerator = createComputeEncoder(@"rayGenerator");
     _intersectionHandler = createComputeEncoder(@"intersectionHandler");
-    _nextEventHandler = createComputeEncoder(@"nextEventEstimationHandler");
+    _lightSamplingHandler = createComputeEncoder(@"lightSamplingHandler");
+    _bsdfSamplingHandler = createComputeEncoder(@"bsdfSamplingHandler");
     _finalHandler = createComputeEncoder(@"accumulateImage");
 
     _commandQueue = [_device newCommandQueue];
@@ -270,6 +274,20 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     
     for (SCNMaterial* material in [geometry materials])
     {
+        float roughness = 1.0;
+        float metallness = 0.0;
+        
+        const char* materialName = [[material name] cStringUsingEncoding:NSUTF8StringEncoding];
+        if (const char* rId = strstr(materialName, "R:"))
+        {
+            roughness = atof(rId+2);
+        }
+        if (const char* mId = strstr(materialName, "M:"))
+        {
+            metallness = atof(mId+2);
+        }
+        NSLog(@"%s: R - %f, M - %f", materialName, roughness, metallness);
+
         NSColor* diffuse = [[material diffuse] contents];
         NSColor* emissive = [[material emission] contents];
 
@@ -281,6 +299,29 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         mtl.emissive[0] = emissive.redComponent;
         mtl.emissive[1] = emissive.greenComponent;
         mtl.emissive[2] = emissive.blueComponent;
+        
+        if (metallness > 0.0f)
+        {
+            if (roughness == 0.0f)
+            {
+                mtl.materialType = MATERIAL_MIRROR;
+            }
+            else
+            {
+                
+            }
+        }
+        else
+        {
+            if (roughness == 1.0f)
+            {
+                mtl.materialType = MATERIAL_DIFFUSE;
+            }
+            else
+            {
+                
+            }
+        }
     }
 
     for (SCNGeometrySource* source in [geometry geometrySources])
@@ -452,7 +493,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
     
-    for (uint32_t i = 0; i < MAX_PATH_LENGTH; ++i)
+    for (uint32_t i = 0; i + 1 < MAX_PATH_LENGTH; ++i)
     {
         [_intersector encodeIntersectionToCommandBuffer:commandBuffer intersectionType:MPSIntersectionTypeNearest
                                               rayBuffer:_primaryRayBuffer rayBufferOffset:0
@@ -474,9 +515,9 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:7];
             [computeEncoder setBuffer:_perFrameData[(_frameIndex + i) % MaxBuffersInFlight].noise offset:0 atIndex:8];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:9];
+            [computeEncoder setBuffer:_bsdfSamplingBuffer offset:0 atIndex:10];
             [computeEncoder setComputePipelineState:_intersectionHandler];
             [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
-            // [computeEncoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
         }
         [computeEncoder endEncoding];
         
@@ -491,7 +532,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         
         // handle next event estimation
         computeEncoder = [commandBuffer computeCommandEncoder];
-        [computeEncoder setLabel:@"Next event estimation"];
+        [computeEncoder setLabel:@"Light sampling"];
         {
             [computeEncoder setTexture:_image atIndex:0];
             [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
@@ -500,7 +541,35 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
             [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:5];
-            [computeEncoder setComputePipelineState:_nextEventHandler];
+            [computeEncoder setComputePipelineState:_lightSamplingHandler];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        }
+        [computeEncoder endEncoding];
+
+        [_intersector encodeIntersectionToCommandBuffer:commandBuffer
+                                       intersectionType:MPSIntersectionTypeNearest
+                                              rayBuffer:_bsdfSamplingBuffer
+                                        rayBufferOffset:0
+                                     intersectionBuffer:_intersectionBuffer
+                               intersectionBufferOffset:0
+                                               rayCount:_rayCount
+                                  accelerationStructure:_accelerationStructure];
+        
+        // handle next event estimation
+        computeEncoder = [commandBuffer computeCommandEncoder];
+        [computeEncoder setLabel:@"BSDF sampling"];
+        {
+            [computeEncoder setTexture:_image atIndex:0];
+            [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
+            [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:1];
+            [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:2];
+            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+            [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
+            [computeEncoder setBuffer:_bsdfSamplingBuffer offset:0 atIndex:5];
+            [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
+            [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:7];
+            [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:8];
+            [computeEncoder setComputePipelineState:_bsdfSamplingHandler];
             [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }
         [computeEncoder endEncoding];
@@ -582,6 +651,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     _rayCount = _dispatchSizeX * _dispatchSizeY;
     _primaryRayBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
+    _bsdfSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
 }
