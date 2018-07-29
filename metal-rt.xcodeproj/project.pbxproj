@@ -32,7 +32,7 @@
 /* Begin PBXFileReference section */
 		6E24750E20D8001400DEAAA1 /* Renderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Renderer.h; sourceTree = "<group>"; };
 		6E24750F20D8001400DEAAA1 /* Renderer.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Renderer.mm; sourceTree = "<group>"; };
-		6E24751020D8001400DEAAA1 /* ShaderTypes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShaderTypes.h; sourceTree = "<group>"; };
+		6E24751020D8001400DEAAA1 /* Raytracing.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Raytracing.h; sourceTree = "<group>"; };
 		6E24751120D8001400DEAAA1 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		6E24751220D8001500DEAAA1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6E24751720D8001500DEAAA1 /* metal-rt.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "metal-rt.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -94,7 +94,7 @@
 			children = (
 				6E24750E20D8001400DEAAA1 /* Renderer.h */,
 				6E24750F20D8001400DEAAA1 /* Renderer.mm */,
-				6E24751020D8001400DEAAA1 /* ShaderTypes.h */,
+				6E24751020D8001400DEAAA1 /* Raytracing.h */,
 				6E24751120D8001400DEAAA1 /* Shaders.metal */,
 				6E24751220D8001500DEAAA1 /* Assets.xcassets */,
 				6EC8A7B520D92A4500032F1B /* Media */,

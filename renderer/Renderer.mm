@@ -3,7 +3,7 @@
 #import <SceneKit/SceneKit.h>
 #import <simd/simd.h>
 #import "Renderer.h"
-#import "ShaderTypes.h"
+#import "Raytracing.h"
 #import <vector>
 #import <random>
 
@@ -13,9 +13,9 @@
 #endif
 
 static const NSUInteger MaxBuffersInFlight = 3;
-static const NSString* sceneName = @"CornellBox-Water-mirror";
+// static const NSString* sceneName = @"CornellBox-Water-mirror";
 // static const NSString* sceneName = @"CornellBox-Water";
-// static const NSString* sceneName = @"cornellbox";
+static const NSString* sceneName = @"cornellbox";
 // static const NSString* sceneName = @"white-box";
 
 @implementation Renderer
@@ -27,19 +27,23 @@ static const NSString* sceneName = @"CornellBox-Water-mirror";
     id<MTLComputePipelineState> _rayGenerator;
     id<MTLComputePipelineState> _intersectionHandler;
     id<MTLComputePipelineState> _lightSamplingHandler;
-    id<MTLComputePipelineState> _bsdfSamplingHandler;
     id<MTLComputePipelineState> _finalHandler;
     id<MTLTexture> _image;
     id<MTLTexture> _referenceImage;
-    id<MTLBuffer> _primaryRayBuffer;
-    id<MTLBuffer> _lightSamplingBuffer;
-    id<MTLBuffer> _bsdfSamplingBuffer;
-    id<MTLBuffer> _intersectionBuffer;
-    id<MTLBuffer> _geometryBuffer;
-    id<MTLBuffer> _indexBuffer;
-    id<MTLBuffer> _materialIndexBuffer;
-    id<MTLBuffer> _materialBuffer;
-    id<MTLBuffer> _lightTriangles;
+    
+    id<MTLBuffer> _primaryRayBuffer; // rays
+    id<MTLBuffer> _lightSamplingBuffer; // rays
+    
+    id<MTLBuffer> _intersectionBuffer; // intersections
+    
+    id<MTLBuffer> _vertexBuffer; // v, n, t
+    id<MTLBuffer> _indexBuffer; // int32
+    
+    id<MTLBuffer> _materialBuffer; // per triangle: material / light index
+    
+    id<MTLBuffer> _referenceBuffer; // triangle # -> material #
+    id<MTLBuffer> _lightTriangles; // emissive triangles
+    
     MTKTextureLoader* _textureLoader;
     
     struct PerFrameData
@@ -142,7 +146,6 @@ static const NSString* sceneName = @"CornellBox-Water-mirror";
     _rayGenerator = createComputeEncoder(@"rayGenerator");
     _intersectionHandler = createComputeEncoder(@"intersectionHandler");
     _lightSamplingHandler = createComputeEncoder(@"lightSamplingHandler");
-    _bsdfSamplingHandler = createComputeEncoder(@"bsdfSamplingHandler");
     _finalHandler = createComputeEncoder(@"accumulateImage");
 
     _commandQueue = [_device newCommandQueue];
@@ -257,8 +260,8 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     };
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<uint32_t> materialIndices;
     std::vector<Material> materials;
+    std::vector<TriangleReference> references;
     std::vector<LightTriangle> lightTriangles;
     
     [self loadReferenceImage];
@@ -385,12 +388,13 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         {
             NSInteger triangleCount = [element primitiveCount];
             
-            materialIndices.reserve(materialIndices.size() + triangleCount);
+            references.reserve(references.size() + triangleCount);
             indices.reserve(indices.size() + 3 * triangleCount);
             
             const uint32_t* rawData = reinterpret_cast<const uint32_t*>([[element data] bytes]);
             for (NSInteger i = 0; i < triangleCount; ++i)
             {
+                uint32_t lightTriangleIndex = uint32_t(-1);
                 if (isEmitter)
                 {
                     const Vertex& v1 = vertices[rawData[0]];
@@ -399,13 +403,19 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
                     vector_float3 p1 = {v1.v[0], v1.v[1], v1.v[2]};
                     vector_float3 p2 = {v2.v[0], v2.v[1], v2.v[2]};
                     vector_float3 p3 = {v3.v[0], v3.v[1], v3.v[2]};
+                    lightTriangleIndex = uint32_t(lightTriangles.size());
                     lightTriangles.emplace_back();
-                    lightTriangles.back().index = static_cast<int>(materialIndices.size());
+                    lightTriangles.back().index = static_cast<int>(references.size());
                     lightTriangles.back().area = 0.5f * simd_length(simd_cross(p2 - p1, p3 - p1));
+                    lightTriangles.back().emissive[0] = materials[materialIndex].emissive[0];
+                    lightTriangles.back().emissive[1] = materials[materialIndex].emissive[1];
+                    lightTriangles.back().emissive[2] = materials[materialIndex].emissive[2];
                     totalArea += lightTriangles.back().area;
                 }
                 
-                materialIndices.emplace_back(materialIndex);
+                references.emplace_back();
+                references.back().materialIndex = uint32_t(materialIndex);
+                references.back().lightTriangleIndex = lightTriangleIndex;
                 indices.emplace_back(*rawData++);
                 indices.emplace_back(*rawData++);
                 indices.emplace_back(*rawData++);
@@ -428,20 +438,21 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         NSLog(@"(%u, %.3f, %.3f, %.3f)", lt.index, lt.area, lt.pdf, lt.cdf);
         cdf += lt.pdf;
     }
+    
     _lightTrianglesCount = static_cast<uint32_t>(lightTriangles.size());
     lightTriangles.emplace_back();
     lightTriangles.back().cdf = cdf;
     lightTriangles.back().pdf = 1.0f;
     lightTriangles.back().area = 0.0f;
 
-    _geometryBuffer = createBuffer(_device, vertices);
+    _vertexBuffer = createBuffer(_device, vertices);
     _indexBuffer = createBuffer(_device, indices);
-    _materialIndexBuffer = createBuffer(_device, materialIndices);
+    _referenceBuffer = createBuffer(_device, references);
     _materialBuffer = createBuffer(_device, materials);
     _lightTriangles = createBuffer(_device, lightTriangles);
 
     _accelerationStructure = [[MPSTriangleAccelerationStructure alloc] initWithDevice:_device];
-    [_accelerationStructure setVertexBuffer:_geometryBuffer];
+    [_accelerationStructure setVertexBuffer:_vertexBuffer];
     [_accelerationStructure setIndexBuffer:_indexBuffer];
     [_accelerationStructure setVertexStride:sizeof(Vertex)];
     [_accelerationStructure setTriangleCount:indices.size() / 3];
@@ -501,7 +512,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
     
-    for (uint32_t i = 0; i + 1 < MAX_PATH_LENGTH; ++i)
+    for (uint32_t i = 0; i < MAX_PATH_LENGTH; ++i)
     {
         [_intersector encodeIntersectionToCommandBuffer:commandBuffer intersectionType:MPSIntersectionTypeNearest
                                               rayBuffer:_primaryRayBuffer rayBufferOffset:0
@@ -514,16 +525,15 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         {
             [computeEncoder setTexture:_image atIndex:0];
             [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
-            [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:1];
+            [computeEncoder setBuffer:_vertexBuffer offset:0 atIndex:1];
             [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:2];
-            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+            [computeEncoder setBuffer:_referenceBuffer offset:0 atIndex:3];
             [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
             [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:5];
             [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
             [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:7];
             [computeEncoder setBuffer:_perFrameData[(_frameIndex + i) % MaxBuffersInFlight].noise offset:0 atIndex:8];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:9];
-            [computeEncoder setBuffer:_bsdfSamplingBuffer offset:0 atIndex:10];
             [computeEncoder setComputePipelineState:_intersectionHandler];
             [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }
@@ -546,38 +556,10 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
             [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:1];
             [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:2];
-            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
+            [computeEncoder setBuffer:_referenceBuffer offset:0 atIndex:3];
             [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:5];
             [computeEncoder setComputePipelineState:_lightSamplingHandler];
-            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
-        }
-        [computeEncoder endEncoding];
-
-        [_intersector encodeIntersectionToCommandBuffer:commandBuffer
-                                       intersectionType:MPSIntersectionTypeNearest
-                                              rayBuffer:_bsdfSamplingBuffer
-                                        rayBufferOffset:0
-                                     intersectionBuffer:_intersectionBuffer
-                               intersectionBufferOffset:0
-                                               rayCount:_rayCount
-                                  accelerationStructure:_accelerationStructure];
-        
-        // handle next event estimation
-        computeEncoder = [commandBuffer computeCommandEncoder];
-        [computeEncoder setLabel:@"BSDF sampling"];
-        {
-            [computeEncoder setTexture:_image atIndex:0];
-            [computeEncoder setBuffer:_intersectionBuffer offset:0 atIndex:0];
-            [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:1];
-            [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:2];
-            [computeEncoder setBuffer:_materialIndexBuffer offset:0 atIndex:3];
-            [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
-            [computeEncoder setBuffer:_bsdfSamplingBuffer offset:0 atIndex:5];
-            [computeEncoder setBuffer:_lightTriangles offset:0 atIndex:6];
-            [computeEncoder setBuffer:_geometryBuffer offset:0 atIndex:7];
-            [computeEncoder setBuffer:_indexBuffer offset:0 atIndex:8];
-            [computeEncoder setComputePipelineState:_bsdfSamplingHandler];
             [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }
         [computeEncoder endEncoding];
@@ -664,7 +646,6 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     _rayCount = _dispatchSizeX * _dispatchSizeY;
     _primaryRayBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
-    _bsdfSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
     _averageRaysPerSecond = 0;

@@ -4,8 +4,8 @@
 
 #ifdef __METAL_VERSION__
 #   define pow metal::pow
-#   define packed_float2(x) packed_float2 x
-#   define packed_float3(x) packed_float3 x
+#   define packed_float2(x) metal::packed_float2 x
+#   define packed_float3(x) metal::packed_float3 x
 #else
 #   include <math.h>
 #   define pow powf
@@ -34,7 +34,7 @@
 #define COMPARE_REF_TO_COLOR    2 // visible, if output is darker than reference
 #define COMPARE_COLOR_TO_REF    3 // visible, if reference is darker than output
 #define COMPARE_LUMINANCE       4 // red/green, red - output brighter, green - reference brighter
-#define COMPARISON_MODE         COMPARE_DISABLED
+#define COMPARISON_MODE         COMPARE_LUMINANCE
 #define COMPARISON_SCALE        10
 
 #define MATERIAL_DIFFUSE    0
@@ -82,8 +82,15 @@ struct Material
     unsigned int materialType;
 };
 
+struct TriangleReference
+{
+    unsigned int materialIndex;
+    unsigned int lightTriangleIndex;
+};
+
 struct LightTriangle
 {
+    packed_float3(emissive);
     float area;
     float pdf;
     float cdf;
@@ -121,16 +128,80 @@ float halton(unsigned int index, unsigned int base)
 
 float vanDerCorput(unsigned int t, unsigned int b)
 {
-    float r = 0.0;
-    float base_inv = 1.0 / float(b);
+    float result = 0.0;
+    float baseInv = 1.0f / float(b);
     
     while (t > 0)
     {
-        unsigned int d = ( t % b );
-        r = r + float(d) * base_inv;
-        base_inv = base_inv / b;
+        result += float(t % b) * baseInv;
+        baseInv *= 1.0f / float(b);
         t = t / b;
     }
     
-    return r;
+    return result;
 }
+
+float triangleSamplePDF(float area, float cosTheta, float distanceToSample)
+{
+    return (distanceToSample * distanceToSample) / (area * cosTheta);
+}
+
+float balanceHeuristic(float fPdf, float gPdf)
+{
+    float f2 = fPdf * fPdf;
+    float g2 = gPdf * gPdf;
+    return f2 / (f2 + g2);
+}
+
+#ifdef __METAL_VERSION__
+
+float3 barycentric(float2 smp)
+{
+    float r1 = sqrt(smp.x);
+    float r2 = smp.y;
+    return float3(1.0f - r1, r1 * (1.0f - r2), r1 * r2);
+}
+
+void buildOrthonormalBasis(thread const float3& n, thread float3& u, thread float3& v)
+{
+    if (n.z < 0.0f)
+    {
+        float a = 1.0f / (1.0f - n.z);
+        float b = n.x * n.y * a;
+        u = float3(1.0f - n.x * n.x * a, -b, n.x);
+        v = float3(b, n.y * n.y * a - 1.0f, -n.y);
+    }
+    else
+    {
+        float a = 1.0f / (1.0f + n.z);
+        float b = -n.x * n.y * a;
+        u = float3(1.0f - n.x * n.x * a, b, -n.x);
+        v = float3(b, 1.0f - n.y * n.y * a, -n.y);
+    }
+}
+
+float3 alignWithNormal(thread const float3& n, float cosTheta, float phi)
+{
+    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
+    
+    float3 u;
+    float3 v;
+    buildOrthonormalBasis(n, u, v);
+    
+    return (u * cos(phi) + v * sin(phi)) * sinTheta + n * cosTheta;
+}
+
+float3 generateDiffuseBounce(float2 smp, thread const float3& n)
+{
+    float cosTheta = sqrt(smp.y);
+    float phi = smp.x * PI * 2.0;
+    return alignWithNormal(n, cosTheta, phi);
+}
+
+float3 generateMirrorBounce(float3 wIn, float3 n)
+{
+    return reflect(wIn, n);
+}
+
+#endif
+
