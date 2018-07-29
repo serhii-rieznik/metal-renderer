@@ -13,9 +13,9 @@
 #endif
 
 static const NSUInteger MaxBuffersInFlight = 3;
-// static const NSString* sceneName = @"CornellBox-Water-mirror";
+static const NSString* sceneName = @"CornellBox-Water-mirror";
 // static const NSString* sceneName = @"CornellBox-Water";
-static const NSString* sceneName = @"cornellbox";
+// static const NSString* sceneName = @"cornellbox";
 // static const NSString* sceneName = @"white-box";
 
 @implementation Renderer

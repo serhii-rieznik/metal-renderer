@@ -34,7 +34,7 @@
 #define COMPARE_REF_TO_COLOR    2 // visible, if output is darker than reference
 #define COMPARE_COLOR_TO_REF    3 // visible, if reference is darker than output
 #define COMPARE_LUMINANCE       4 // red/green, red - output brighter, green - reference brighter
-#define COMPARISON_MODE         COMPARE_LUMINANCE
+#define COMPARISON_MODE         COMPARE_DISABLED
 #define COMPARISON_SCALE        10
 
 #define MATERIAL_DIFFUSE    0
