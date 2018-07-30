@@ -85,22 +85,22 @@ kernel void rayGenerator(device Ray* rays [[buffer(0)]],
     float3 side = float3(ct, 0.0, st);
     float3 up = float3(0.0, 1.0, 0.0);
     float3 view = float3(st, 0.0, -ct);
-
+    
     float4 noiseSample = noise[(threadId.x % NOISE_DIMENSIONS) + (threadId.y % NOISE_DIMENSIONS) * NOISE_DIMENSIONS];
     float2 dudv = (noiseSample.xy * 2.0 - 1.0) / float2(wholeSize - 1);
-
+    
     float2 normalizedCoords = float2(2 * threadId.x, 2 * threadId.y) / float2(wholeSize - 1) - 1.0f;
-
+    
     rays[rayIndex].origin = up - view * 2.35;
     rays[rayIndex].direction = normalize(side * (dudv.x + normalizedCoords.x) + up * (dudv.y + normalizedCoords.y * aspect) + view);
     rays[rayIndex].minDistance = 0.0;
     rays[rayIndex].maxDistance = INFINITY;
-    rays[rayIndex].throughput = 1.0;
-    rays[rayIndex].radiance = 0.0;
     rays[rayIndex].bounce = 0;
     rays[rayIndex].targetIndex = -1;
     rays[rayIndex].lightPdf = 0.0;
     rays[rayIndex].materialPdf = 1.0;
+    spectrum_set(rays[rayIndex].throughput, 1.0f);
+    spectrum_set(rays[rayIndex].radiance, 0.0f);
 }
 
 Vertex interpolate(device const Vertex& t0, device const Vertex& t1, device const Vertex& t2, float3 uvw)
@@ -209,8 +209,7 @@ float lightTriangleSamplePDF(float trianglePdf, float triangleArea, thread const
     return validDirection ? trianglePdf * triangleSamplePDF(triangleArea, LdotD, distanceToLight) : 0.0f;
 }
 
-kernel void intersectionHandler(texture2d<float, access::read_write> image [[texture(0)]],
-                                device const Intersection* intersections [[buffer(0)]],
+kernel void intersectionHandler(device const Intersection* intersections [[buffer(0)]],
                                 device const Vertex* vertexBuffer [[buffer(1)]],
                                 device const packed_uint3* indexBuffer [[buffer(2)]],
                                 device const TriangleReference* referenceBuffer [[buffer(3)]],
@@ -225,8 +224,8 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
 {
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
     lightSamplingRays[rayIndex].maxDistance = -1.0f;
-    lightSamplingRays[rayIndex].throughput = 0.0;
-
+    spectrum_set(lightSamplingRays[rayIndex].throughput, 0.0f);
+    
     device Ray& ray = primaryRays[rayIndex];
     device const Intersection& intersection = intersections[rayIndex];
     if (intersection.distance < DISTANCE_EPSILON)
@@ -239,15 +238,15 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
     device const packed_uint3& hitTriangle = indexBuffer[intersection.triangleIndex];
     device const Material& material = materialBuffer[ref.materialIndex];
     float3 wI = ray.direction;
-
+    
     uint noiseIndex =
-        ((threadId.x + ray.bounce + sharedData.frameIndex / 3) % NOISE_DIMENSIONS) +
-        ((threadId.y + ray.bounce + sharedData.frameIndex / 5) % NOISE_DIMENSIONS) * NOISE_DIMENSIONS;
+    ((threadId.x + ray.bounce + sharedData.frameIndex / 3) % NOISE_DIMENSIONS) +
+    ((threadId.y + ray.bounce + sharedData.frameIndex / 5) % NOISE_DIMENSIONS) * NOISE_DIMENSIONS;
     
     device const float4& noiseSample = noise[noiseIndex];
     
     Vertex hitVertex = interpolate(vertexBuffer[hitTriangle.x], vertexBuffer[hitTriangle.y], vertexBuffer[hitTriangle.z], intersection.coordinates);
-
+    
     // light sampling
     if (ray.bounce + 1 < MAX_PATH_LENGTH)
     {
@@ -263,15 +262,18 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
         
         bool validLightTriangle = (lightPdf > 0.0f) && (selectedLightTriangle.index != intersection.triangleIndex);
         
-        float3 emittedLight = selectedLightTriangle.emissive / lightPdf;
-        float3 bsdf = material.diffuse * materialBsdf;
-
+        Spectrum emittedLight = spectrum_mul(selectedLightTriangle.emissive, 1.0f / lightPdf);
+        Spectrum bsdf = spectrum_mul(material.diffuse, materialBsdf);
+        
         lightSamplingRays[rayIndex].origin = hitVertex.v + hitVertex.n * DISTANCE_EPSILON;
         lightSamplingRays[rayIndex].direction = directionToLight;
         lightSamplingRays[rayIndex].minDistance = 0.0;
         lightSamplingRays[rayIndex].maxDistance = validLightTriangle ? INFINITY : -1.0;
         lightSamplingRays[rayIndex].targetIndex = selectedLightTriangle.index;
-        lightSamplingRays[rayIndex].throughput = emittedLight * ray.throughput * bsdf * weight;
+        
+        Spectrum a = spectrum_mul(emittedLight, ray.throughput);
+        Spectrum b = spectrum_mul(bsdf, weight);
+        lightSamplingRays[rayIndex].throughput = spectrum_mul(a, b);
     }
     
     // BSDF sampling
@@ -287,7 +289,8 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
         float lPdf = ray.lightPdf * lightTriangleSamplePDF(selectedLightTriangle.pdf, selectedLightTriangle.area, ray.origin, lightVertex, directionToLight);
         float weight = balanceHeuristic(mPdf, lPdf);
         
-        ray.radiance += material.emissive * ray.throughput * weight * ray.materialPdf;
+        Spectrum added_radiance = spectrum_mul(spectrum_mul(material.emissive, ray.throughput), weight * ray.materialPdf);
+        spectrum_add_inplace(ray.radiance, added_radiance);
     }
     
     // generate new ray
@@ -298,28 +301,30 @@ kernel void intersectionHandler(texture2d<float, access::read_write> image [[tex
         ray.direction = generateNextBounce(material, wI, hitVertex.n, noiseSample.zw, bsdf, pdf);
         ray.minDistance = 0.0;
         ray.maxDistance = INFINITY;
-        ray.throughput *= material.diffuse * bsdf / pdf;
         ray.materialPdf = pdf;
         ray.lightPdf = (material.materialType == MATERIAL_MIRROR) ? 0.0 : 1.0;
         ray.bounce += 1;
+        
+        Spectrum throughputScale = spectrum_mul(material.diffuse, bsdf / pdf);
+        spectrum_mul_inplace(ray.throughput, throughputScale);
     }
 }
 
-kernel void lightSamplingHandler(texture2d<float, access::read_write> image [[texture(0)]],
-                                       device const Intersection* intersections [[buffer(0)]],
-                                       device Ray* primaryRays [[buffer(1)]],
-                                       constant SharedData& sharedData [[buffer(2)]],
-                                       device const TriangleReference* referenceBuffer [[buffer(3)]],
-                                       device const Material* materialBuffer [[buffer(4)]],
-                                       device const Ray* lightSamplingRays [[buffer(5)]],
-                                       uint2 threadId [[thread_position_in_grid]],
-                                       uint2 wholeSize [[threads_per_grid]])
+kernel void lightSamplingHandler(device const Intersection* intersections [[buffer(0)]],
+                                 device Ray* primaryRays [[buffer(1)]],
+                                 constant SharedData& sharedData [[buffer(2)]],
+                                 device const TriangleReference* referenceBuffer [[buffer(3)]],
+                                 device const Material* materialBuffer [[buffer(4)]],
+                                 device const Ray* lightSamplingRays [[buffer(5)]],
+                                 uint2 threadId [[thread_position_in_grid]],
+                                 uint2 wholeSize [[threads_per_grid]])
 {
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
     device const Intersection& intersection = intersections[rayIndex];
     if ((intersection.distance >= DISTANCE_EPSILON) && (intersection.triangleIndex == lightSamplingRays[rayIndex].targetIndex))
     {
-        primaryRays[rayIndex].radiance += lightSamplingRays[rayIndex].throughput;
+        spectrum_add_inplace(primaryRays[rayIndex].radiance, lightSamplingRays[rayIndex].throughput);
+        // primaryRays[rayIndex].radiance += lightSamplingRays[rayIndex].throughput;
     }
 }
 
@@ -330,11 +335,14 @@ kernel void accumulateImage(texture2d<float, access::read_write> image [[texture
                             uint2 wholeSize [[threads_per_grid]])
 {
     uint rayIndex = threadId.y * wholeSize.x + threadId.x;
-    float3 color = sourceRays[rayIndex].radiance;
+    Spectrum color = sourceRays[rayIndex].radiance;
     if (ACCUMULATE_IMAGE && (sharedData.frameIndex > 0))
     {
+        float factor = float(sharedData.frameIndex) / float(sharedData.frameIndex + 1);
         float3 stored = image.read(threadId).xyz;
-        color = mix(color, stored, float(sharedData.frameIndex) / float(sharedData.frameIndex + 1));
+        for (uint i = 0; i < SPECTRUM_SAMPLES; ++i)
+            color.values[i] = mix(color.values[i], stored[i], factor);
+        // color = mix(color, stored, );
     }
-    image.write(float4(color, 1.0), threadId);
+    image.write(float4(color.values[0], color.values[1], color.values[2], 1.0), threadId);
 }

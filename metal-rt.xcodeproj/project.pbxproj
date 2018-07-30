@@ -53,6 +53,7 @@
 		6E24753820D8001600DEAAA1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		6E24753920D8001600DEAAA1 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		6E24754A20D8157F00DEAAA1 /* MetalPerformanceShaders.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalPerformanceShaders.framework; path = System/Library/Frameworks/MetalPerformanceShaders.framework; sourceTree = SDKROOT; };
+		6E4B571E210E84C6000712DB /* Spectrum.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Spectrum.h; sourceTree = "<group>"; };
 		6EC8A7A520D8ED4C00032F1B /* Default-568h@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Default-568h@2x.png"; sourceTree = "<group>"; };
 		6EC8A7B020D9080900032F1B /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
 		6EC8A7B520D92A4500032F1B /* Media */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Media; sourceTree = "<group>"; };
@@ -95,6 +96,7 @@
 				6E24750E20D8001400DEAAA1 /* Renderer.h */,
 				6E24750F20D8001400DEAAA1 /* Renderer.mm */,
 				6E24751020D8001400DEAAA1 /* Raytracing.h */,
+				6E4B571E210E84C6000712DB /* Spectrum.h */,
 				6E24751120D8001400DEAAA1 /* Shaders.metal */,
 				6E24751220D8001500DEAAA1 /* Assets.xcassets */,
 				6EC8A7B520D92A4500032F1B /* Media */,

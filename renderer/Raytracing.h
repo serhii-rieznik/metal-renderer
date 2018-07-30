@@ -40,6 +40,8 @@
 #define MATERIAL_DIFFUSE    0
 #define MATERIAL_MIRROR     1
 
+#include "Spectrum.h"
+
 struct SharedData
 {
     unsigned int frameIndex;
@@ -53,8 +55,8 @@ struct Ray
     float minDistance;
     packed_float3(direction);
     float maxDistance;
-    packed_float3(throughput);
-    packed_float3(radiance);
+    Spectrum throughput;
+    Spectrum radiance;
     unsigned int targetIndex;
     unsigned int bounce;
     float materialPdf;
@@ -77,8 +79,8 @@ struct Vertex
 
 struct Material
 {
-    packed_float3(diffuse);
-    packed_float3(emissive);
+    Spectrum diffuse;
+    Spectrum emissive;
     unsigned int materialType;
 };
 
@@ -90,7 +92,7 @@ struct TriangleReference
 
 struct LightTriangle
 {
-    packed_float3(emissive);
+    Spectrum emissive;
     float area;
     float pdf;
     float cdf;
