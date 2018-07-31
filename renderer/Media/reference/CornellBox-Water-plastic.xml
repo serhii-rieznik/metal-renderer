@@ -15,9 +15,10 @@
 		<rgb name="reflectance" value="1.0 1.0 1.0"/>
 	</bsdf>
 
-	<bsdf type="diffuse" id="rightSphere_material">
-		<rgb name="reflectance" value="1.0 1.0 1.0"/>
-	</bsdf>
+    <bsdf type="plastic" id="rightSphere_material">
+        <float name="intIOR" value="1.76"/>
+        <float name="extIOR" value="1.0"/>
+    </bsdf>
 
 	<bsdf type="diffuse" id="floor_material">
 		<rgb name="reflectance" value="0.725 0.71 0.68"/>
@@ -43,9 +44,9 @@
 		<rgb name="reflectance" value="0.725 0.71 0.68"/>
 	</bsdf>
 
-    <bsdf type="dielectric" id="water_material">
-        <string name="intIOR" value="water"/>
-        <string name="extIOR" value="air"/>
+    <bsdf type="plastic" id="water_material">
+        <float name="intIOR" value="1.33333"/>
+        <float name="extIOR" value="1.0"/>
     </bsdf>
     
 	<shape type="serialized" id="leftSphere_mesh">

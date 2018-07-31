@@ -12,8 +12,10 @@
 #   import <OpenEXR/ImfInputFile.h>
 #endif
 
+static const NSInteger ThreadGroupSize = 16;
 static const NSUInteger MaxBuffersInFlight = 3;
-static const NSString* sceneName = @"CornellBox-Water-mirror";
+// static const NSString* sceneName = @"CornellBox-Water-mirror";
+static const NSString* sceneName = @"CornellBox-Water-plastic";
 // static const NSString* sceneName = @"CornellBox-Water";
 // static const NSString* sceneName = @"cornellbox";
 // static const NSString* sceneName = @"white-box";
@@ -281,22 +283,9 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     
     for (SCNMaterial* material in [geometry materials])
     {
-        float roughness = 1.0;
-        float metallness = 0.0;
-        
-        const char* materialName = [[material name] cStringUsingEncoding:NSUTF8StringEncoding];
-        if (const char* rId = strstr(materialName, "R:"))
-        {
-            roughness = atof(rId+2);
-        }
-        if (const char* mId = strstr(materialName, "M:"))
-        {
-            metallness = atof(mId+2);
-        }
-        NSLog(@"%s: R - %f, M - %f", materialName, roughness, metallness);
-
         NSColor* diffuse = [[material diffuse] contents];
         NSColor* emissive = [[material emission] contents];
+        NSColor* specular = [[material specular] contents];
 
         materials.emplace_back();
         Material& mtl = materials.back();
@@ -306,6 +295,10 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         mtl.emissive[0] = emissive.redComponent;
         mtl.emissive[1] = emissive.greenComponent;
         mtl.emissive[2] = emissive.blueComponent;
+        mtl.ior = specular.blueComponent;
+
+        float roughness = specular.redComponent;
+        float metallness = specular.greenComponent;
         
         if (metallness > 0.0f)
         {
@@ -315,19 +308,21 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             }
             else
             {
-                
+                // plastic
             }
+        }
+        else if (roughness == 1.0f)
+        {
+            mtl.materialType = MATERIAL_DIFFUSE;
+        }
+        else if (mtl.ior <= 0.0)
+        {
+            mtl.ior = std::abs(mtl.ior);
+            mtl.materialType = (roughness == 0.0) ? MATERIAL_SMOOTH_PLASTIC : MATERIAL_DIFFUSE /* TODO : rough plastic */;
         }
         else
         {
-            if (roughness == 1.0f)
-            {
-                mtl.materialType = MATERIAL_DIFFUSE;
-            }
-            else
-            {
-                
-            }
+            mtl.materialType = (roughness == 0.0) ? MATERIAL_SMOOTH_DIELECTRIC : MATERIAL_DIFFUSE /* TODO : rough dielectric */;
         }
     }
 
@@ -406,6 +401,9 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
                     lightTriangleIndex = uint32_t(lightTriangles.size());
                     lightTriangles.emplace_back();
                     lightTriangles.back().index = static_cast<int>(references.size());
+                    memcpy(&(lightTriangles.back().v1), &(v1), sizeof(Vertex));
+                    memcpy(&(lightTriangles.back().v2), &(v2), sizeof(Vertex));
+                    memcpy(&(lightTriangles.back().v3), &(v3), sizeof(Vertex));
                     lightTriangles.back().area = 0.5f * simd_length(simd_cross(p2 - p1, p3 - p1));
                     lightTriangles.back().emissive[0] = materials[materialIndex].emissive[0];
                     lightTriangles.back().emissive[1] = materials[materialIndex].emissive[1];
@@ -435,7 +433,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
     {
         lt.pdf = lt.area / totalArea;
         lt.cdf = cdf;
-        NSLog(@"(%u, %.3f, %.3f, %.3f)", lt.index, lt.area, lt.pdf, lt.cdf);
+        NSLog(@"(%.3f, %.3f, %.3f)", lt.area, lt.pdf, lt.cdf);
         cdf += lt.pdf;
     }
     
@@ -507,7 +505,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].noise offset:0 atIndex:2];
         [computeEncoder setComputePipelineState:_rayGenerator];
-        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
@@ -535,7 +533,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_perFrameData[(_frameIndex + i) % MaxBuffersInFlight].noise offset:0 atIndex:8];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:9];
             [computeEncoder setComputePipelineState:_intersectionHandler];
-            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
         }
         [computeEncoder endEncoding];
         
@@ -560,7 +558,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:5];
             [computeEncoder setComputePipelineState:_lightSamplingHandler];
-            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
         }
         [computeEncoder endEncoding];
     }
@@ -574,7 +572,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:0];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
         [computeEncoder setComputePipelineState:_finalHandler];
-        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];

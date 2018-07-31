@@ -37,8 +37,10 @@
 #define COMPARISON_MODE         COMPARE_DISABLED
 #define COMPARISON_SCALE        10
 
-#define MATERIAL_DIFFUSE    0
-#define MATERIAL_MIRROR     1
+#define MATERIAL_DIFFUSE            0
+#define MATERIAL_MIRROR             1
+#define MATERIAL_SMOOTH_PLASTIC     2
+#define MATERIAL_SMOOTH_DIELECTRIC  3
 
 #include "Spectrum.h"
 
@@ -81,6 +83,7 @@ struct Material
 {
     Spectrum diffuse;
     Spectrum emissive;
+    float ior;
     unsigned int materialType;
 };
 
@@ -93,6 +96,9 @@ struct TriangleReference
 struct LightTriangle
 {
     Spectrum emissive;
+    Vertex v1;
+    Vertex v2;
+    Vertex v3;
     float area;
     float pdf;
     float cdf;

@@ -9,31 +9,40 @@
 # http://graphics.cs.williams.edu/data
 # http://www.graphics.cornell.edu/online/box/data.html
 #
-newmtl leftSphere_R:1M:0
+newmtl leftSphere
     Kd 1.0 1.0 1.0
+    Ks 1.0 0.0 0.0
 
 newmtl rightSphere
     Kd 1.0 1.0 1.0
+    Ks 1.0 0.0 0.0
     Kx 10 10 10
 
 newmtl floor
     Kd 0.7250 0.7100 0.6800
+    Ks 1.0 0.0 0.0
 
 newmtl ceiling
     Kd 0.7250 0.7100 0.6800
+    Ks 1.0 0.0 0.0
 
 newmtl backWall
 	Kd 0.7250 0.7100 0.6800
+    Ks 1.0 0.0 0.0
 
 newmtl rightWall
     Kd 0.161 0.133 0.427
+    Ks 1.0 0.0 0.0
 
 newmtl leftWall
 	Kd 0.6300 0.0650 0.0500
+    Ks 1.0 0.0 0.0
 
 newmtl light
     Kd 0.7250 0.7100 0.6800
+    Ks 1.0 0.0 0.0
     Ka 10 10 10
 
-newmtl water_R:0_M:1
+newmtl water
     Kd 1.0 1.0 1.0
+    Ks 0.0 1.0 0.0
