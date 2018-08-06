@@ -4,18 +4,17 @@
 
 #ifdef __METAL_VERSION__
 
-float fresnel(thread const float3& n, thread const float3& wI, float etaIn, float etaOut)
+float fresnel(thread const float3& n, thread const float3& i, float etaOut, float etaIn)
 {
     float result = 1.0;
-    float cosThetaI = clamp(dot(n, wI), -1.0f, 1.0f);
-    float scale = etaIn / etaOut;
-    float cosThetaTSquared = 1.0 - (1.0 - cosThetaI * cosThetaI) * (scale * scale);
-    if (cosThetaTSquared > 0.0)
+    float etaScale = etaOut / etaIn;
+    float cosThetaI = clamp(dot(n, i), -1.0f, 1.0f);
+    float sinThetaTSquared = (etaScale * etaScale) * (1.0 - cosThetaI * cosThetaI);
+    if (sinThetaTSquared < 1.0)
     {
-        cosThetaI = abs(cosThetaI);
-        float cosThetaT = sqrt(cosThetaTSquared);
-        float rS = (etaOut * cosThetaI - etaIn * cosThetaT) / (etaOut * cosThetaI - etaIn * cosThetaT);
-        float rP = (etaIn * cosThetaI - etaOut * cosThetaT) / (etaIn * cosThetaI + etaOut * cosThetaT);
+        float cosThetaT = sqrt(1.0 - sinThetaTSquared);
+        float rS = (etaIn * cosThetaI - etaOut * cosThetaT) / (etaIn * cosThetaI + etaOut * cosThetaT);
+        float rP = (etaIn * cosThetaT - etaOut * cosThetaI) / (etaIn * cosThetaT + etaOut * cosThetaI);
         result = 0.5 * (rS * rS + rP * rP);
     }
     return result;
@@ -25,9 +24,7 @@ Vertex interpolate(device const Vertex& t0, device const Vertex& t1, device cons
 {
     Vertex result;
     result.v = t0.v * uvw.x + t1.v * uvw.y + t2.v * uvw.z;
-    result.n = t0.n * uvw.x + t1.n * uvw.y + t2.n * uvw.z;
-    result.t = t0.t * uvw.x + t1.t * uvw.y + t2.t * uvw.z;
-    result.n = normalize(result.n);
+    result.n = normalize(t0.n * uvw.x + t1.n * uvw.y + t2.n * uvw.z);
     return result;
 }
 
@@ -35,9 +32,7 @@ Vertex interpolate(thread const Vertex& t0, thread const Vertex& t1, thread cons
 {
     Vertex result;
     result.v = t0.v * uvw.x + t1.v * uvw.y + t2.v * uvw.z;
-    result.n = t0.n * uvw.x + t1.n * uvw.y + t2.n * uvw.z;
-    result.t = t0.t * uvw.x + t1.t * uvw.y + t2.t * uvw.z;
-    result.n = normalize(result.n);
+    result.n = normalize(t0.n * uvw.x + t1.n * uvw.y + t2.n * uvw.z);
     return result;
 }
 
@@ -51,124 +46,147 @@ Vertex interpolate(thread const Vertex& t0, thread const Vertex& t1, thread cons
     return interpolate(t0, t1, t2, float3(uv, 1.0 - uv.x - uv.y));
 }
 
-LightTriangle selectLightTriangle(float xi, device const LightTriangle* lightTriangles, int trianglesCount)
+device const LightTriangle& selectLightTriangle(float xi, device const LightTriangle* lightTriangles, int trianglesCount)
 {
     int index = 0;
     for (; (index < trianglesCount) && (lightTriangles[index + 1].cdf <= xi); ++index);
     return lightTriangles[index];
 }
 
-float2 sampleConcreteMaterialType(uint materialType, thread const float3& wI, thread const float3& wO, thread const float3& n)
+float2 sampleMaterial(device const Material& material, thread const float3& wI, thread const float3& wO,
+                      thread const float3& n, thread const float4& noiseSample)
 {
+    float2 result;
+    
     float cosTheta = dot(wO, n);
     
-    switch (materialType)
+    switch (material.materialType)
     {
         case MATERIAL_MIRROR:
         {
             bool isMirrorDirection = abs(dot(reflect(wI, n), wO) - 1.0) < ANGLE_EPSILON;
-            return isMirrorDirection ? float2(cosTheta, 1.0) : float2(0.0, 1.0);
+            result = isMirrorDirection ? float2(cosTheta, 1.0) : float2(0.0, 1.0);
+            break;
         }
             
-        case MATERIAL_DIFFUSE:
-            return (1.0 / PI) * cosTheta;
+        case MATERIAL_SMOOTH_PLASTIC:
+        {
+            float fI = fresnel(n, -wI, 1.0, material.ior);
+            if (fI < noiseSample.y)
+            {
+                // diffuse reflectance
+                result = (1.0 / PI) * cosTheta;
+            }
+            else
+            {
+                // specular reflectance
+                bool isMirrorDirection = abs(dot(reflect(wI, n), wO) - 1.0) < ANGLE_EPSILON;
+                result = isMirrorDirection ? float2(cosTheta, 1.0) : float2(0.0, 1.0);
+            }
+            break;
+        }
             
-        default:
-            return float2(0.0, 1.0);
+        case MATERIAL_SMOOTH_DIELECTRIC:
+        {
+            float fI = fresnel(n, -wI, 1.0, material.ior);
+            if (fI < noiseSample.y)
+            {
+                // transmittance
+                result = 0.0; // (1.0 / PI) * cosTheta;
+            }
+            else
+            {
+                // specular reflectance
+                bool isMirrorDirection = abs(dot(reflect(wI, n), wO) - 1.0) < ANGLE_EPSILON;
+                result = isMirrorDirection ? float2(cosTheta, 1.0) : float2(0.0, 1.0);
+            }
+            break;
+        }
+            
+        default: // MATERIAL_DIFFUSE
+        {
+            result = (1.0 / PI) * cosTheta;
+            break;
+        }
     }
+    
+    return result;
 }
 
-float3 generateConcreteNextBounce(uint materialType, thread const float3& wI, thread const float3& n,
-                          device const float4& noiseSample, thread float& bsdf, thread float& pdf)
+float3 generateNextBounce(device const Material& material, device const Ray& rI, thread const float3& n,
+                          thread const float4& noiseSample, thread float& bsdf, thread float& pdf, thread float& ior)
 {
-    float3 wO = 0.0;
+    float3 wI = rI.direction;
+    float3 wO;
+    float2 properties;
     
-    switch (materialType)
+    float currentIoR = rI.params.w;
+    ior = currentIoR;
+    
+    switch (material.materialType)
     {
         case MATERIAL_MIRROR:
         {
             wO = reflect(wI, n);
+            properties = float2(dot(wO, n), 1.0);
+            break;
+        }
+
+        case MATERIAL_SMOOTH_PLASTIC:
+        {
+            float fI = fresnel(n, -wI, currentIoR, material.ior);
+            if (fI < noiseSample.y)
+            {
+                wO = generateDiffuseBounce(noiseSample.zw, n);
+                properties = (1.0 / PI) * dot(wO, n);
+            }
+            else
+            {
+                wO = reflect(wI, n);
+                properties = float2(dot(wO, n), 1.0);
+            }
             break;
         }
             
-        default:
+        case MATERIAL_SMOOTH_DIELECTRIC:
+        {
+            float fI = fresnel(n, -wI, currentIoR, material.ior);
+            if (fI < noiseSample.y)
+            {
+                ior = material.ior;
+                wO = wI;// generateDiffuseBounce(noiseSample.zw, n);
+                properties = 1.0; // (1.0 / PI) * dot(wO, n);
+            }
+            else
+            {
+                wO = reflect(wI, n);
+                properties = float2(dot(wO, n), 1.0);
+            }
+            break;
+        }
+            
+        default: // MATERIAL_DIFFUSE
         {
             wO = generateDiffuseBounce(noiseSample.zw, n);
-            break;
+            properties = (1.0 / PI) * dot(wO, n);
         }
     }
     
-    float2 smp = sampleConcreteMaterialType(materialType, wI, wO, n);
-    bsdf = smp.x;
-    pdf = smp.y;
-
+    bsdf = properties.x;
+    pdf = properties.y;
+    
     return wO;
 }
 
-float2 sampleMaterial(device const Material& material, thread const float3& wI, thread const float3& wO, thread const float3& n,
-                      device const float4& noiseSample)
-{
-    switch (material.materialType)
-    {
-        case MATERIAL_SMOOTH_PLASTIC:
-        {
-            float2 smp = 0.0;
-            float f = fresnel(n, -wI, 1.0, material.ior);
-            if (f < noiseSample.y)
-            {
-                smp = sampleConcreteMaterialType(MATERIAL_MIRROR, wI, wO, n);
-                // smp.y = f;
-            }
-            else
-            {
-                smp = sampleConcreteMaterialType(MATERIAL_DIFFUSE, wI, wO, n);
-                // smp.x *= 1.0 - f;
-                // smp.y *= 1.0 - f;
-            }
-            return smp;
-        }
-            
-        default:
-            return sampleConcreteMaterialType(material.materialType, wI, wO, n);
-    }
-}
-
-float3 generateNextBounce(device const Material& material, thread const float3& wI, thread const float3& n,
-                          device const float4& noiseSample, thread float& bsdf, thread float& pdf)
-{
-    switch (material.materialType)
-    {
-        case MATERIAL_SMOOTH_PLASTIC:
-        {
-            float3 bounce;
-            float f = fresnel(n, -wI, 1.0, material.ior);
-            if (f < noiseSample.y)
-            {
-                bounce = generateConcreteNextBounce(MATERIAL_MIRROR, wI, n, noiseSample, bsdf, pdf);
-            }
-            else
-            {
-                bounce = generateConcreteNextBounce(MATERIAL_DIFFUSE, wI, n, noiseSample, bsdf, pdf);
-            }
-            return bounce;
-        }
-            
-        default:
-            return generateConcreteNextBounce(material.materialType, wI, n, noiseSample, bsdf, pdf);
-    }
-}
-
-float lightTriangleSamplePDF(float trianglePdf, float triangleArea, thread const float3& source, thread const Vertex& sample,
-                             thread packed_float3& directionToLight)
+float lightTriangleSamplePDF(float trianglePdf, float triangleArea, thread const float3& source, thread const Vertex& sample, thread packed_float3& directionToLight)
 {
     directionToLight = sample.v - source;
     
     float distanceToLight = length(directionToLight);
     directionToLight = normalize(directionToLight);
-    float LdotD = -dot(directionToLight, sample.n);
-    bool validDirection = (distanceToLight >= DISTANCE_EPSILON) && (LdotD >= ANGLE_EPSILON);
-    
-    return validDirection ? trianglePdf * triangleSamplePDF(triangleArea, LdotD, distanceToLight) : 0.0f;
+    float LdotD = -dot(directionToLight.xyz, sample.n.xyz);
+    float validDirection = float(distanceToLight >= DISTANCE_EPSILON) * float(LdotD >= ANGLE_EPSILON);
+    return validDirection * trianglePdf * triangleSamplePDF(triangleArea, LdotD, distanceToLight);
 }
 
 #endif

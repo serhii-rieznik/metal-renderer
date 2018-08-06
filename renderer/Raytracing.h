@@ -2,81 +2,97 @@
 
 #include <simd/simd.h>
 
-#ifdef __METAL_VERSION__
-#   define pow metal::pow
-#   define packed_float2(x) metal::packed_float2 x
-#   define packed_float3(x) metal::packed_float3 x
-#else
-#   include <math.h>
-#   define pow powf
-#   define packed_float2(x) float x[2]
-#   define packed_float3(x) float x[3]
+#ifndef __METAL_VERSION__
+using uint = unsigned int;
+using packed_uint3 = uint[3];
+using packed_float3 = float[3];
 #endif
 
-#define ENABLE_TONE_MAPPING     false
-#define MANUAL_SRGB             false
+#define ENABLE_TONE_MAPPING         false
+#define MANUAL_SRGB                 false
 
-#define ACCUMULATE_IMAGE        true
+#define ACCUMULATE_IMAGE            true
 
-#define DISTANCE_EPSILON        0.0001
-#define ANGLE_EPSILON           0.00003807693583
-#define PI                      3.1415926
-#define NOISE_DIMENSIONS        64
-#define ANIMATE_NOISE           1
+#define DISTANCE_EPSILON            0.0001
+#define ANGLE_EPSILON               0.00003807693583
+#define PI                          3.1415926
+#define NOISE_DIMENSIONS            64
+#define ANIMATE_NOISE               1
 
-#define MAX_FRAMES              0
-#define MAX_PATH_LENGTH         8
+#define MAX_FRAMES                  0
+#define MAX_PATH_LENGTH             8
 
-#define CONTENT_SCALE           (1.0f / 2.0f)
+#define CONTENT_SCALE               (1.0f / 2.0f)
 
-#define COMPARE_DISABLED        0
-#define COMPARE_ABSOLUTE_VALUE  1 // just compare abs(color - ref) or abs(ref - color)
-#define COMPARE_REF_TO_COLOR    2 // visible, if output is darker than reference
-#define COMPARE_COLOR_TO_REF    3 // visible, if reference is darker than output
-#define COMPARE_LUMINANCE       4 // red/green, red - output brighter, green - reference brighter
-#define COMPARISON_MODE         COMPARE_DISABLED
-#define COMPARISON_SCALE        10
+#define COMPARE_DISABLED            0
+#define COMPARE_ABSOLUTE_VALUE      1 // just compare abs(color - ref) or abs(ref - color)
+#define COMPARE_REF_TO_COLOR        2 // visible, if output is darker than reference
+#define COMPARE_COLOR_TO_REF        3 // visible, if reference is darker than output
+#define COMPARE_LUMINANCE           4 // red/green, red - output brighter, green - reference brighter
+#define COMPARISON_MODE             COMPARE_DISABLED
+#define COMPARISON_SCALE            10
 
-#define MATERIAL_DIFFUSE            0
-#define MATERIAL_MIRROR             1
-#define MATERIAL_SMOOTH_PLASTIC     2
-#define MATERIAL_SMOOTH_DIELECTRIC  3
+enum : uint
+{
+    MATERIAL_DIFFUSE,
+    MATERIAL_MIRROR,
+    MATERIAL_SMOOTH_PLASTIC,
+    MATERIAL_SMOOTH_DIELECTRIC,
+    
+    MATERIAL_COUNT
+};
 
 #include "Spectrum.h"
 
 struct SharedData
 {
-    unsigned int frameIndex;
-    unsigned int lightTrianglesCount;
+    uint frameIndex;
+    uint lightTrianglesCount;
     float time;
 };
 
 struct Ray
 {
-    packed_float3(origin);
-    float minDistance;
-    packed_float3(direction);
-    float maxDistance;
-    Spectrum throughput;
-    Spectrum radiance;
-    unsigned int targetIndex;
-    unsigned int bounce;
-    float materialPdf;
-    float lightPdf;
+    packed_float3 origin; // 3
+    float minDistance; // 1
+    
+    packed_float3 direction; // 3
+    float maxDistance; // 1
+    
+    Spectrum throughput; // 3
+    Spectrum radiance; // 3
+    
+    vector_float4 params; // 3 // material pdf, light pdf, bounce, ior
+
+    // ---------------------
+    // 4 + 4 + 9 = 17 * 4 = 68 bytes
+};
+
+struct LightSamplingRay
+{
+    packed_float3 origin; // 3
+    float minDistance; // 1
+    
+    packed_float3 direction; // 3
+    float maxDistance; // 1
+    
+    Spectrum throughput; // 3
+    uint targetIndex; // 1
+    // ---------------------
+    // 3x4 = 12 * 4 = 48 bytes
 };
 
 struct Intersection
 {
     float distance;
-    unsigned int triangleIndex;
+    uint triangleIndex;
     packed_float2 coordinates;
 };
 
 struct Vertex
 {
-    packed_float3(v);
-    packed_float3(n);
-    packed_float2(t);
+    packed_float3 v;
+    packed_float3 n;
 };
 
 struct Material
@@ -84,13 +100,14 @@ struct Material
     Spectrum diffuse;
     Spectrum emissive;
     float ior;
-    unsigned int materialType;
+    uint materialType;
 };
 
 struct TriangleReference
 {
-    unsigned int materialIndex;
-    unsigned int lightTriangleIndex;
+    packed_uint3 tri;
+    uint materialIndex;
+    uint lightTriangleIndex;
 };
 
 struct LightTriangle
@@ -102,7 +119,7 @@ struct LightTriangle
     float area;
     float pdf;
     float cdf;
-    unsigned int index;
+    uint index;
 };
 
 float toLinear(float value)
@@ -117,7 +134,7 @@ float toSRGB(float value)
     return (value < 0.0031308) ? (12.92f * value) : (1.055f * pow(value, 1.0f / 2.4f) - 0.055);
 }
 
-float halton(unsigned int index, unsigned int base)
+float halton(uint index, uint base)
 {
     float f = 1.0f;
     float r = 0.0f;
@@ -125,25 +142,24 @@ float halton(unsigned int index, unsigned int base)
     
     while (index > 0)
     {
+        r += f * (index % base);
         f = f / fbase;
-        r = r + f * (index % base);
         index = index / base;
     }
     
     return r;
 }
 
-
-float vanDerCorput(unsigned int t, unsigned int b)
+float vanDerCorput(uint index, uint base)
 {
     float result = 0.0;
-    float baseInv = 1.0f / float(b);
+    float baseInv = 1.0f / float(base);
     
-    while (t > 0)
+    while (index > 0)
     {
-        result += float(t % b) * baseInv;
-        baseInv *= 1.0f / float(b);
-        t = t / b;
+        result += float(index % base) * baseInv;
+        baseInv *= baseInv;
+        index = index / base;
     }
     
     return result;

@@ -12,7 +12,7 @@
 #   import <OpenEXR/ImfInputFile.h>
 #endif
 
-static const NSInteger ThreadGroupSize = 16;
+static const MTLSize ThreadGroupSize = MTLSizeMake(4, 4, 1);
 static const NSUInteger MaxBuffersInFlight = 3;
 // static const NSString* sceneName = @"CornellBox-Water-mirror";
 static const NSString* sceneName = @"CornellBox-Water-plastic";
@@ -43,7 +43,7 @@ static const NSString* sceneName = @"CornellBox-Water-plastic";
     
     id<MTLBuffer> _materialBuffer; // per triangle: material / light index
     
-    id<MTLBuffer> _referenceBuffer; // triangle # -> material #
+    id<MTLBuffer> _referenceBuffer; // triangle # -> material # -> triangle v1, v2, v3
     id<MTLBuffer> _lightTriangles; // emissive triangles
     
     MTKTextureLoader* _textureLoader;
@@ -254,12 +254,6 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
 
 - (void)initRaytracing
 {
-    struct Vertex
-    {
-        float v[3];
-        float n[3];
-        float t[2];
-    };
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Material> materials;
@@ -308,7 +302,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             }
             else
             {
-                // plastic
+                // rough conductor
             }
         }
         else if (roughness == 1.0f)
@@ -324,6 +318,14 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         {
             mtl.materialType = (roughness == 0.0) ? MATERIAL_SMOOTH_DIELECTRIC : MATERIAL_DIFFUSE /* TODO : rough dielectric */;
         }
+        
+        NSString* materialType[MATERIAL_COUNT] = {
+            @"diffuse",
+            @"mirror",
+            @"smooth plastic",
+            @"smooth dielectric",
+        };
+        NSLog(@"New material: %@ with type: %@", material.name, materialType[mtl.materialType]);
     }
 
     for (SCNGeometrySource* source in [geometry geometrySources])
@@ -353,18 +355,17 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         Vertex& vert = vertices[i];
         {
             const vector_float3* ptr = reinterpret_cast<const vector_float3*>(vertexData + i * vertexStride);
-            memcpy(vert.v, ptr, sizeof(float) * 3);
+            memcpy(&vert.v, ptr, sizeof(float) * 3);
         }
         if (normalData)
         {
             const vector_float3* ptr = reinterpret_cast<const vector_float3*>(normalData + i * normalStride);
-            memcpy(vert.n, ptr, sizeof(float) * 3);
+            memcpy(&vert.n, ptr, sizeof(float) * 3);
         }
-        
         if (texCoordData)
         {
-            const vector_float2* ptr = reinterpret_cast<const vector_float2*>(texCoordData + i * texCoordStride);
-            memcpy(vert.t, ptr, sizeof(float) * 2);
+            // const vector_float2* ptr = reinterpret_cast<const vector_float2*>(texCoordData + i * texCoordStride);
+            // memcpy(vert.t, ptr, sizeof(float) * 2);
         }
     }
 
@@ -414,6 +415,9 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
                 references.emplace_back();
                 references.back().materialIndex = uint32_t(materialIndex);
                 references.back().lightTriangleIndex = lightTriangleIndex;
+                references.back().tri[0] = rawData[0];
+                references.back().tri[1] = rawData[1];
+                references.back().tri[2] = rawData[2];
                 indices.emplace_back(*rawData++);
                 indices.emplace_back(*rawData++);
                 indices.emplace_back(*rawData++);
@@ -505,13 +509,14 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].noise offset:0 atIndex:2];
         [computeEncoder setComputePipelineState:_rayGenerator];
-        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:ThreadGroupSize];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
     
     for (uint32_t i = 0; i < MAX_PATH_LENGTH; ++i)
     {
+        [_intersector setRayStride:sizeof(Ray)];
         [_intersector encodeIntersectionToCommandBuffer:commandBuffer intersectionType:MPSIntersectionTypeNearest
                                               rayBuffer:_primaryRayBuffer rayBufferOffset:0
                                      intersectionBuffer:_intersectionBuffer intersectionBufferOffset:0
@@ -533,10 +538,11 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_perFrameData[(_frameIndex + i) % MaxBuffersInFlight].noise offset:0 atIndex:8];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:9];
             [computeEncoder setComputePipelineState:_intersectionHandler];
-            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:ThreadGroupSize];
         }
         [computeEncoder endEncoding];
         
+        [_intersector setRayStride:sizeof(LightSamplingRay)];
         [_intersector encodeIntersectionToCommandBuffer:commandBuffer
                                        intersectionType:MPSIntersectionTypeNearest
                                               rayBuffer:_lightSamplingBuffer
@@ -558,7 +564,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
             [computeEncoder setBuffer:_materialBuffer offset:0 atIndex:4];
             [computeEncoder setBuffer:_lightSamplingBuffer offset:0 atIndex:5];
             [computeEncoder setComputePipelineState:_lightSamplingHandler];
-            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
+            [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:ThreadGroupSize];
         }
         [computeEncoder endEncoding];
     }
@@ -572,7 +578,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         [computeEncoder setBuffer:_primaryRayBuffer offset:0 atIndex:0];
         [computeEncoder setBuffer:_perFrameData[_frameIndex % MaxBuffersInFlight].sharedData offset:0 atIndex:1];
         [computeEncoder setComputePipelineState:_finalHandler];
-        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:MTLSizeMake(ThreadGroupSize, ThreadGroupSize, 1)];
+        [computeEncoder dispatchThreads:MTLSizeMake(_dispatchSizeX, _dispatchSizeY, 1) threadsPerThreadgroup:ThreadGroupSize];
     }
     [computeEncoder popDebugGroup];
     [computeEncoder endEncoding];
@@ -643,7 +649,7 @@ id<MTLBuffer> createBuffer(id<MTLDevice> device, const std::vector<T>& v)
         
     _rayCount = _dispatchSizeX * _dispatchSizeY;
     _primaryRayBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
-    _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(Ray) options:MTLResourceStorageModePrivate];
+    _lightSamplingBuffer = [_device newBufferWithLength:_rayCount * sizeof(LightSamplingRay) options:MTLResourceStorageModePrivate];
     _intersectionBuffer = [_device newBufferWithLength:_rayCount * sizeof(Intersection) options:MTLResourceStorageModePrivate];
     _frameIndex = 0;
     _averageRaysPerSecond = 0;

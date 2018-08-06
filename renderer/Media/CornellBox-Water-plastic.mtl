@@ -11,11 +11,11 @@
 #
 newmtl leftSphere
     Kd 1.0 1.0 1.0
-    Ks 1.0 0.0 0.0
+    Ks 0.0 0.0 -1.5
 
 newmtl rightSphere
     Kd 1.0 1.0 1.0
-    Ks 0.0 0.0 -1.76
+    Ks 0.0 1.0 0.0
     Kx 10 10 10
 
 newmtl floor

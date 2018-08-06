@@ -38,12 +38,36 @@ void spectrum_add_inplace(device Spectrum& a, device const Spectrum& b) {
     FOR_EACH_WAVELENGTH{ a.values[i] += b.values[i]; }
 }
 
+void spectrum_add_inplace(thread Spectrum& a, thread const Spectrum& b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] += b.values[i]; }
+}
+
+void spectrum_add_inplace(thread Spectrum& a, device const Spectrum& b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] += b.values[i]; }
+}
+
 void spectrum_mul_inplace(device Spectrum& a, thread const Spectrum& b) {
     FOR_EACH_WAVELENGTH{ a.values[i] *= b.values[i]; }
 }
 
 void spectrum_mul_inplace(device Spectrum& a, device const Spectrum& b) {
     FOR_EACH_WAVELENGTH{ a.values[i] *= b.values[i]; }
+}
+
+void spectrum_mul_inplace(thread Spectrum& a, thread const Spectrum& b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] *= b.values[i]; }
+}
+
+void spectrum_mul_inplace(thread Spectrum& a, device const Spectrum& b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] *= b.values[i]; }
+}
+
+void spectrum_mul_inplace(thread Spectrum& a, float b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] *= b; }
+}
+
+void spectrum_mul_inplace(device Spectrum& a, float b) {
+    FOR_EACH_WAVELENGTH{ a.values[i] *= b; }
 }
 
 Spectrum spectrum_set(float value) {
